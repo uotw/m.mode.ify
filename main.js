@@ -1,58 +1,68 @@
 const electron = require('electron')
-// Module to control application life.
 const app = electron.app
-// Module to create native browser window.
 const BrowserWindow = electron.BrowserWindow
+const { ipcMain, desktopCapturer } = electron
+
+// @electron/remote replaces the old built-in `remote` module (removed in Electron 14).
+require('@electron/remote/main').initialize()
+
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
 let mainWindow
+
 function createWindow () {
-  // Create the browser window.
-  mainWindow = new BrowserWindow({width: 1280, height: 800})
+  // Create the browser window. nodeIntegration + contextIsolation:false keep the
+  // renderer's require()/Node API usage working as it did on Electron 1.x.
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  })
   mainWindow.setResizable(false);
+
+  // Let the renderer use @electron/remote on this window.
+  require('@electron/remote/main').enable(mainWindow.webContents)
 
   // and load the index.html of the app.
   mainWindow.loadURL(`file://${__dirname}/index.html`)
 
-//initialize GLOBAL WORKING DIR VARIABLE
- global.workdirObj = {prop1: null};
- mainWindow.on('close', function (event) {
+  //initialize GLOBAL WORKING DIR VARIABLE
+  global.workdirObj = {prop1: null};
+  mainWindow.on('close', function (event) {
     //event.preventDefault();
-   if (global.workdirObj.prop1) {
-    console.log('removing the ' + global.workdirObj.prop1 + ' directory.');
-    const spawnsync = require('child_process').spawnSync;
-    spawnsync("rm",['-rf', global.workdirObj.prop1]);
-  }});
+    if (global.workdirObj.prop1) {
+      console.log('removing the ' + global.workdirObj.prop1 + ' directory.');
+      const spawnsync = require('child_process').spawnSync;
+      spawnsync("rm",['-rf', global.workdirObj.prop1]);
+    }});
 
   // Open the DevTools.
   //mainWindow.webContents.openDevTools()
 
-  // Emitted when the window is closed.
   mainWindow.on('closed', function () {
-    // Dereference the window object, usually you would store windows
-    // in an array if your app supports multi windows, this is the time
-    // when you should delete the corresponding element.
     mainWindow = null
   })
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
+// desktopCapturer is main-process-only since Electron 17. Expose the source
+// list to the renderer over IPC (it matches by name and uses the id for capture).
+ipcMain.handle('get-sources', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['window', 'screen'] })
+  return sources.map(s => ({ id: s.id, name: s.name }))
+})
+
 app.on('ready', createWindow)
 
-// Quit when all windows are closed.
 app.on('window-all-closed', function () {
-  // On OS X it is common for applications and their menu bar
-  // to stay active until the user quits explicitly with Cmd + Q
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
 app.on('activate', function () {
-  // On OS X it's common to re-create a window in the app when the
-  // dock icon is clicked and there are no other windows open.
   if (mainWindow === null) {
     createWindow()
   }

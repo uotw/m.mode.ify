@@ -1,15 +1,14 @@
 // This file is required by the index.html file and will
 // be executed in the renderer process for that window.
 // All of the Node.js APIs are available in this process.
-const {desktopCapturer, screen} = require('electron');
-var Jimp = require("jimp");
-var remote = require('electron').remote; 
+const {ipcRenderer, webUtils} = require('electron'); // desktopCapturer→IPC; webUtils for dropped-file paths
+var remote = require('@electron/remote');            // built-in `remote` removed in Electron 14
 var dialog = remote.dialog;
-var $ = require('jQuery');
+var $ = require('jquery');                            // lowercase (case-sensitive on Win/Linux)
 var path = require('path');
 require('shelljs/global');
-const osTmpdir = require('os-tmpdir');
-var ostemp = osTmpdir();
+const os = require('os');                             // os-tmpdir replaced by built-in os
+var ostemp = os.tmpdir();
 const {shell} = require('electron');
 var appRootDir = require('app-root-dir').get();
 // Cross-platform ffmpeg/ffprobe from ffmpeg-static + ffprobe-static (macOS
@@ -131,11 +130,10 @@ $("#filelistwrap").on('drop', function(event) {
 	event.preventDefault();
 	filelist=[];
 	var files = event.originalEvent.dataTransfer.files;
-	spawn(appswitchpath, [ '-a', 'M.mode.ify']);
-	//spawn(appswitch -a "ClipDeidentifier"
+	remote.getCurrentWindow().focus();   // replaces the macOS-only `appswitch` binary
 	for (var i = 0; i < files.length; i++) {
 		var name = files[i].name;
-		var pathn = files[i].path;
+		var pathn = webUtils.getPathForFile(files[i]);   // File.path was removed in Electron 32+
 		if (fs.lstatSync(pathn).isDirectory()) {
 			var temp_list = [];
 			temp_list = search(pathn);
@@ -146,7 +144,7 @@ $("#filelistwrap").on('drop', function(event) {
 					//$('#filelist').append(index + ': ' + temp_list[k] + '<br />');
 				}
 			}
-		} else if (isclip(name, files[i].path)>0) {
+		} else if (isclip(name, webUtils.getPathForFile(files[i]))>0) {
 			if (filelist.indexOf(pathn) == -1) {
 				filelist.push(pathn);
 				index = filelist.length;
@@ -1134,7 +1132,7 @@ function appScreenshot(callback,imageFormat) {
                  stream.getTracks()[0].stop();
              } catch (e) {}
          }
-         video.src = URL.createObjectURL(stream);
+         video.srcObject = stream;
          document.body.appendChild(video);
      };
  
@@ -1142,14 +1140,12 @@ function appScreenshot(callback,imageFormat) {
          console.log(e);
      };
  
-     desktopCapturer.getSources({types: ['window', 'screen']}, (error, sources) => {
-         if (error) throw error;
-         // console.log(sources);
+     // desktopCapturer now lives in the main process — fetch the source list over IPC.
+     ipcRenderer.invoke('get-sources').then((sources) => {
          for (let i = 0; i < sources.length; ++i) {
-             //console.log(sources);
-             // Filter: main screen
+             // Filter: main screen (this app's own window, matched by title)
              if (sources[i].name === document.title) {
-                 navigator.webkitGetUserMedia({
+                 navigator.mediaDevices.getUserMedia({
                      audio: false,
                      video: {
                          mandatory: {
@@ -1161,11 +1157,11 @@ function appScreenshot(callback,imageFormat) {
                              maxHeight: 4000
                          }
                      }
-                 }, this.handleStream, this.handleError);
-                 return
+                 }).then(_this.handleStream).catch(_this.handleError);
+                 return;
              }
          }
-     });
+     }).catch(_this.handleError);
  }
 function decodeBase64Image(dataString) {
   var matches = dataString.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/),
@@ -1176,7 +1172,7 @@ function decodeBase64Image(dataString) {
   }
 
   response.type = matches[1];
-  response.data = new Buffer(matches[2], 'base64');
+  response.data = Buffer.from(matches[2], 'base64');
 
   return response;
 }
@@ -1191,8 +1187,9 @@ $('#save').click(function(){
 			dialog.showSaveDialog({
     				title: 'Save M.mode.ify with measurements',
     				defaultPath: '~/Desktop/'+fileonly+'.mmode.png'
-  			}, function (fileName) {
-       				if (fileName === undefined){
+  			}).then(function (result) {
+       				var fileName = result.filePath;
+       				if (result.canceled || !fileName){
             				console.log("You didn't save the file");
             				return;
        				}
