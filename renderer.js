@@ -12,8 +12,14 @@ const osTmpdir = require('os-tmpdir');
 var ostemp = osTmpdir();
 const {shell} = require('electron');
 var appRootDir = require('app-root-dir').get();
-var ffmpegpath = appRootDir + '/node_modules/ffmpeg/ffmpeg';
-var ffprobepath = appRootDir + '/node_modules/ffmpeg/ffprobe';
+// Cross-platform ffmpeg/ffprobe from ffmpeg-static + ffprobe-static (macOS
+// arm64/x64 + Windows x64), resolved in ./ffmpeg-paths.js. The spawn() calls
+// below are unchanged — they just use these resolved paths.
+var ffmpegPaths = require('./ffmpeg-paths');
+var ffmpegpath = ffmpegPaths.ffmpegPath;
+var ffprobepath = ffmpegPaths.ffprobePath;
+// NOTE: dicom2jpeg is NOT provided by ffmpeg-static — DICOM input still relies on
+// this hand-bundled, macOS-only binary (out of scope for the static-binary swap).
 var dicom2jpegpath = appRootDir + '/node_modules/ffmpeg/dicom2jpeg';
 var appswitchpath = appRootDir + '/node_modules/imagemagick/appswitch';
 var curlpath = appRootDir + '/node_modules/curl/curl';

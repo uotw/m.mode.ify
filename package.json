@@ -24,6 +24,8 @@
     "app-root-dir": "^1.0.2",
     "dialogue": "0.0.0",
     "electron-screenshot-app": "^4.0.3",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
     "jimp": "^0.2.27",
     "jquery": "^3.1.1",
     "os-tmpdir": "^1.0.2",
