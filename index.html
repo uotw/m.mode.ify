@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>M.mode.ify</title>
+	<!-- Auth0 Lock script -->
+
+<!-- Setting the right viewport -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<link rel="stylesheet" type="text/css" href="style.css">
+<link rel="stylesheet" type="text/css" href="flatbuttons.css">
+<link rel="stylesheet" type="text/css" href="select.css">
+  </head>
+<body>
+ <div id="maintitle"><img src="mainlogo.png" id="logo"></img><h1>M.mode.ify</h1><div id="copyright">Copyright 2017 Ben C. Smith, MD, FACEP <a href="https://twitter.com/UltrasoundJelly" target="_blank"><i class="fa fa-twitter" aria-hidden="true"></i></a> <a href="mailto:bensmith.md@gmail.com" target="_self"><i class="fa fa-envelope" aria-hidden="true"></i></a></div></div>
+	<div id="filelistwrap">
+		<div id="drag">Drop your clip here</div>
+	</div>
+	<div id="loading-container">
+    		<div class="loading"></div>
+    		<div id="loading-text">Generating Preview</div>
+	</div>
+<div id="selectlinemsg">Click to select a pivot point, then drag to select your line.</div>
+<div id=myprogresswrap>
+    <div id="progressmsg">creating your m.mode</div>
+        <div id="myProgress">
+                <div id="myBar">
+                        <div id="label">0%</div>
+                </div>
+        </div>
+        <div id="timeleft"></div>
+</div>
+<div id="calibratemsg">while you wait... click and drag over 4cm to calibrate</div>
+<div id="calibratemsgplaceholder"></div>
+<div id="mmodemsg">Click and drag to measure</div>
+<div id=bodywrap>
+	
+	<div id="selectline">
+		<div id="selectlinewrap"><canvas id="selectlinecanvas"></canvas></div>
+		<div id="calibratewrap"><canvas id="calibratecanvas"></canvas></div>
+	</div>
+	<div id="mmode">
+                <div id="mmodewrap"><div id="measureresult"></div><canvas id="mmodecanvas"></canvas><ul id="slices"></ul></div>
+        </div>
+</div>
+   <div id=sidebar>
+	<div id=poster></div>
+	<button type="button" class="rightbtn btn btn-outlined btn-black btn-lg" id="calibrateok" style="display:none">OK</button>
+	<button type="button" class="rightbtn btn btn-outlined btn-black btn-lg" id="selectlineok" style="display:none" >OK</button>
+	<button type="button" class="leftbtn btn btn-outlined btn-black btn-lg" id="restart"  style="display:none">Start Over</button>
+	<button type="button" class="leftbtn btn btn-outlined btn-black btn-lg" id="recalibrate" style="display:none">Recalibrate</button>
+	<button type="button" class="leftbtn btn btn-outlined btn-black btn-lg" id="save" style="display:none">Save</button>
+   </div>
+	<div id=fadetoblack></div>
+	
+</body>
+  <script>
+    // You can also require other files to run in this process
+    window.$ = window.jQuery = require('jquery');
+    require('./renderer.js');
+
+  </script>
+<script>if (typeof module === 'object') {window.module = module; module = undefined;}</script>
+<script>if (window.module) module = window.module; var $ = require('jQuery');</script>
+</html>
