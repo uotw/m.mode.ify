@@ -1,0 +1,28 @@
+{
+  "appId": "com.ultrasoundoftheweek.mmodeify",
+  "productName": "M.mode.ify",
+  "asar": false,
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "**/*",
+    "!**/node_modules/ffprobe-static/bin/linux/**/*",
+    "!**/node_modules/ffprobe-static/bin/win32/**/*",
+    "!**/node_modules/ffprobe-static/bin/darwin/x64/**/*"
+  ],
+  "mac": {
+    "icon": "icon.icns",
+    "hardenedRuntime": true,
+    "entitlements": "entitlements.mac.plist",
+    "entitlementsInherit": "entitlements.mac.plist",
+    "gatekeeperAssess": false,
+    "identity": "Core Ultrasound, LLC (6VK3JZ7LRU)",
+    "notarize": false,
+    "artifactName": "M.mode.ify-arm64.${ext}",
+    "target": {
+      "target": "dmg",
+      "arch": "arm64"
+    }
+  }
+}

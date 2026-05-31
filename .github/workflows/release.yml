@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed by the release job to create/update a GitHub Release
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    # Copy node_modules into the app instead of hardlinking — otherwise the x64
+    # ffmpeg swap below would mutate files already sealed inside the signed
+    # arm64 bundle and break its code signature ("sealed resource is invalid").
+    env:
+      USE_HARD_LINKS: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      # ffprobe-static ships an x86_64 binary in its darwin/arm64 slot, so the
+      # arm64 app would bundle an Intel component (macOS Rosetta-deprecation
+      # warning). Swap in the genuine arm64 ffprobe before the arm64 build so it
+      # gets signed + notarized like everything else.
+      - name: Use a genuine arm64 ffprobe
+        run: |
+          npm install --no-save @ffprobe-installer/darwin-arm64
+          cp node_modules/@ffprobe-installer/darwin-arm64/ffprobe \
+             node_modules/ffprobe-static/bin/darwin/arm64/ffprobe
+          chmod +x node_modules/ffprobe-static/bin/darwin/arm64/ffprobe
+          a=$(lipo -archs node_modules/ffprobe-static/bin/darwin/arm64/ffprobe)
+          echo "arm64 ffprobe arch: $a"
+          [ "$a" = "arm64" ] || { echo "::error::arm64 ffprobe is not arm64 ($a)"; exit 1; }
+
+      # ffmpeg-static ships a single binary for the host arch (arm64 on the
+      # macos-latest runner). ffprobe-static bundles every platform, so only
+      # ffmpeg needs swapping between the two mac builds. The ImageMagick engine
+      # is WebAssembly (@imagemagick/magick-wasm) — platform-agnostic, no swap.
+      - name: Build & sign arm64
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: npm run dist-macarm -- --publish never
+
+      - name: Swap in x64 ffmpeg binary
+        run: |
+          rm -f node_modules/ffmpeg-static/ffmpeg
+          npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
+
+      - name: Build & sign x64
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: npm run dist-mac64 -- --publish never
+
+      # Fail immediately if signing was silently skipped (e.g. bad cert secret),
+      # instead of wasting a notarization round-trip on an unsigned app.
+      - name: Verify Developer ID signing
+        run: |
+          for app in "dist/mac-arm64/"*.app "dist/mac/"*.app; do
+            echo "Checking: $app"
+            codesign -dvv "$app" 2>&1 | grep -q "Authority=Developer ID Application" \
+              || { echo "::error::$app is NOT Developer ID signed (check MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD)"; exit 1; }
+            codesign --verify --deep --strict --verbose=2 "$app" \
+              || { echo "::error::signature verification failed for $app"; exit 1; }
+            echo "signed: $app"
+          done
+
+      - name: Notarize & staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for dmg in dist/*.dmg; do
+            echo "::group::Notarizing $dmg"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+            echo "::endgroup::"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmgs
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build & sign (x64)
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: npm run dist-win64 -- --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [mac, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true

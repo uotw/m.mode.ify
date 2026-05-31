@@ -1,0 +1,31 @@
+{
+  "appId": "com.ultrasoundoftheweek.mmodeify",
+  "productName": "M.mode.ify",
+  "asar": false,
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "**/*",
+    "!**/node_modules/ffmpeg-static/ffmpeg",
+    "!**/node_modules/ffprobe-static/bin/darwin/**/*",
+    "!**/node_modules/ffprobe-static/bin/linux/**/*",
+    "!**/node_modules/ffprobe-static/bin/win32/ia32/**/*"
+  ],
+  "win": {
+    "icon": "build/icon.png",
+    "artifactName": "M.mode.ify-Setup-x64.${ext}",
+    "azureSignOptions": {
+      "publisherName": "Core Ultrasound, LLC",
+      "endpoint": "https://eus.codesigning.azure.net/",
+      "codeSigningAccountName": "coreultrasound",
+      "certificateProfileName": "SonoClipShareApps"
+    },
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ]
+  }
+}

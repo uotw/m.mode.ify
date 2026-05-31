@@ -5,7 +5,11 @@
   "description": "Create and m-mode from any clip.",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist-macarm": "electron-builder --config ./build/buildarm.json",
+    "dist-mac64": "electron-builder --config ./build/buildmac.json",
+    "dist-win64": "electron-builder --win --x64 --config ./build/buildwin64.json"
   },
   "keywords": [
     "Electron"
@@ -17,7 +21,8 @@
   },
   "homepage": "https://www.ultrasoundoftheweek.com/m-mode-ify",
   "devDependencies": {
-    "electron": "^42.3.0"
+    "electron": "^42.3.0",
+    "electron-builder": "^26.0.0"
   },
   "directories.bin": "node_modules/.bin/",
   "dependencies": {
