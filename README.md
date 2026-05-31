@@ -120,4 +120,14 @@ Releases are produced by the `Release` GitHub Actions workflow on a `v*` tag: it
 
 ## License & credits
 
-By **Ben C. Smith, MD, FACEP**. Because it distributes GPL-licensed FFmpeg, M.mode.ify is distributed under the **GNU General Public License, v2 (or later)**. Image processing uses ImageMagick (ImageMagick License). See **About → in the app menu** for full attributions, or the [original article](https://pubmed.ncbi.nlm.nih.gov/26764277/) for the technique.
+Copyright © 2026 **Ben C. Smith, MD, FACEP**.
+
+M.mode.ify is free software, licensed under the **GNU General Public License, version 3 or later (GPL-3.0-or-later)** — see the [`LICENSE`](LICENSE) file. This matches the GPL-licensed FFmpeg binaries the app bundles and distributes.
+
+Bundled third-party components:
+
+- **FFmpeg / FFprobe** (via [`ffmpeg-static`](https://github.com/eugeneware/ffmpeg-static) + [`ffprobe-static`](https://github.com/joshwnj/ffprobe-static)) — GPLv3-licensed builds; their corresponding source is available from the FFmpeg project (<https://ffmpeg.org>) and the build provider.
+- **ImageMagick** via [@imagemagick/magick-wasm](https://github.com/dlemstra/magick-wasm) — ImageMagick License (Apache-2.0).
+- **Electron**, **jQuery**, **@electron/remote** — MIT.
+
+See **About → in the app menu** for full attributions, or the [original article](https://pubmed.ncbi.nlm.nih.gov/26764277/) for the technique.
