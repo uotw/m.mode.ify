@@ -24,22 +24,26 @@ canvas#calibratecanvas:hover{
                 list-style-type: none;
                 display: inline;
 }
+/* Animate transform/opacity (composited on the GPU thread) instead of
+   margin-left (layout → reflows the whole inline strip every frame and stalls
+   on the main thread exactly when magick-wasm is busy extracting columns).
+   This keeps each slice's entrance smooth as the m-mode builds. */
 .mmodeslice{
-animation-name: slidein;
-    animation-duration: 0.5s;
+    display: inline-block;
+    vertical-align: top;
+    animation: slidein 0.3s ease-out;
 }
 @keyframes slidein {
-    from {margin-left:30px;}
-    to {margin-left:0px;}
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 .mmodesliceanimate{
-animation-name: wave;
-    animation-duration: 0.5s;
+    animation: wave 0.5s ease;
 }
 @keyframes wave {
-	0% {margin-left:0px;}
-	50% {margin-left:30px}
-	100% {margin-left:0px}
+	0%   { transform: translateY(0); }
+	50%  { transform: translateY(-10px); }
+	100% { transform: translateY(0); }
 }
 #myprogresswrap{
   width:250px;
@@ -78,8 +82,9 @@ width: 250px;
 	display:none;
 }
 div#timeleft {
-    left: 20px;
-    position: absolute;
+    /* In normal flow (was position:absolute) so it reserves its own line and
+       doesn't overlap the calibrate prompt below the progress bar. */
+    margin: 4px 0 0 20px;
 }
 #measureresult{
 z-index:950;
@@ -345,6 +350,47 @@ h1 {
 #calibratemsg {
     display:none;
     margin:10px;
+    /* Sit above the z-index:999 calibrate canvas so the cm <select> is
+       clickable (otherwise the canvas overlay swallows the clicks). */
+    position: relative;
+    z-index: 1000;
+}
+#calcmselect {
+    font-size: 1em;
+    margin: 0 2px;
+    padding: 1px 3px;
+    vertical-align: baseline;
+    cursor: pointer;
+}
+/* In-window splash: "M.mode.ify" holds briefly, zooms to 5000% and fades out,
+   revealing the interface underneath. Removed from the DOM by renderer.js. */
+#splash {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #111;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    animation: splashfade 1.5s ease-in forwards;
+}
+.splashword {
+    font: 600 46px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #fff;
+    white-space: nowrap;
+    transform-origin: center center;
+    animation: splashzoom 1.5s ease-in forwards;
+}
+@keyframes splashzoom {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1); }
+    100% { transform: scale(50); }
+}
+@keyframes splashfade {
+    0%   { opacity: 1; }
+    35%  { opacity: 1; }
+    100% { opacity: 0; }
 }
 #calibratemsgplaceholder{
 	margin:10px;

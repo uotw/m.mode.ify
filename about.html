@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+   <head>
+      <meta charset="UTF-8">
+      <title>About M.mode.ify</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <style>
+      body {
+         font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         margin: 18px;
+         color: #222;
+         line-height: 1.45;
+      }
+      h1 { font-size: 20px; margin: 0 0 2px; }
+      .sub { color: #666; margin-bottom: 14px; }
+      a { text-decoration: none; color: #0099ff; }
+      a:hover { text-decoration: underline; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #888; margin: 16px 0 4px; }
+      ul { margin: 4px 0; padding-left: 20px; }
+      li { margin: 3px 0; }
+      .logo { width: 48px; height: 48px; float: left; margin: 0 12px 8px 0; }
+   </style>
+   <script>
+      window.$ = window.jQuery = require('jquery');
+      var shell = require('electron').shell;
+      // Open external links in the default browser.
+      $(document).on('click', 'a[href^="http"]', function(event) {
+          event.preventDefault();
+          shell.openExternal(this.href);
+      });
+      // Fill in the version from package.json.
+      try {
+        var v = require('./package.json').version;
+        $(function(){ $('#version').text('Version ' + v); });
+      } catch(e) {}
+   </script>
+   </head>
+   <body>
+      <img class="logo" src="mainlogo.png" onerror="this.style.display='none'">
+      <h1>M.mode.ify</h1>
+      <div class="sub" id="version">Version</div>
+      <div>Create an M-mode from any saved ultrasound clip. By Ben C. Smith, MD, FACEP.</div>
+
+      <h2>Original article</h2>
+      <ul>
+        <li>The technique behind M.mode.ify is described in the original article:
+            <a href="https://pubmed.ncbi.nlm.nih.gov/26764277/">Smith B, et al. (PMID: 26764277)</a>.</li>
+      </ul>
+
+      <h2>Open-source components</h2>
+      <ul>
+        <li>This software uses code of <a href="http://ffmpeg.org">FFmpeg</a> licensed under the
+            <a href="http://www.gnu.org/licenses/gpl-2.0.html">GPLv2</a> (or later); its source can be
+            downloaded <a href="https://github.com/FFmpeg/FFmpeg">here</a>.</li>
+        <li>Image processing uses <a href="https://imagemagick.org/">ImageMagick</a> via
+            <a href="https://github.com/dlemstra/magick-wasm">@imagemagick/magick-wasm</a>, under the
+            <a href="https://imagemagick.org/script/license.php">ImageMagick License</a>.</li>
+        <li>Built with <a href="https://www.electronjs.org/">Electron</a> and
+            <a href="https://jquery.com/">jQuery</a>.</li>
+      </ul>
+
+      <h2>License</h2>
+      <ul>
+        <li>Because it distributes GPL-licensed FFmpeg, M.mode.ify is distributed under the
+            <a href="http://www.gnu.org/licenses/gpl-2.0.html">GNU General Public License, version 2</a>
+            (or later).</li>
+        <li>More about M.mode.ify at
+            <a href="https://www.ultrasoundoftheweek.com/m-mode-ify">ultrasoundoftheweek.com/m-mode-ify</a>.</li>
+      </ul>
+   </body>
+</html>

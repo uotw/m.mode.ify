@@ -1,33 +1,23 @@
 // This file is required by the index.html file and will
 // be executed in the renderer process for that window.
 // All of the Node.js APIs are available in this process.
-const {ipcRenderer, webUtils} = require('electron'); // desktopCapturer→IPC; webUtils for dropped-file paths
+const {webUtils} = require('electron'); // webUtils for dropped-file paths (File.path was removed in Electron)
 var remote = require('@electron/remote');            // built-in `remote` removed in Electron 14
 var dialog = remote.dialog;
 var $ = require('jquery');                            // lowercase (case-sensitive on Win/Linux)
+// Remove the in-window splash overlay once its zoom/fade animation finishes.
+$(function () { setTimeout(function () { var s = document.getElementById('splash'); if (s && s.parentNode) { s.parentNode.removeChild(s); } }, 1550); });
 var path = require('path');
-require('shelljs/global');
 const os = require('os');                             // os-tmpdir replaced by built-in os
 var ostemp = os.tmpdir();
 const {shell} = require('electron');
-var appRootDir = require('app-root-dir').get();
+var mmmagick = require('./mmode-magick');   // cross-platform ImageMagick (WASM) — replaces the bundled `magick` binary + .sh scripts
 // Cross-platform ffmpeg/ffprobe from ffmpeg-static + ffprobe-static (macOS
 // arm64/x64 + Windows x64), resolved in ./ffmpeg-paths.js. The spawn() calls
 // below are unchanged — they just use these resolved paths.
 var ffmpegPaths = require('./ffmpeg-paths');
 var ffmpegpath = ffmpegPaths.ffmpegPath;
 var ffprobepath = ffmpegPaths.ffprobePath;
-// NOTE: dicom2jpeg is NOT provided by ffmpeg-static — DICOM input still relies on
-// this hand-bundled, macOS-only binary (out of scope for the static-binary swap).
-var dicom2jpegpath = appRootDir + '/node_modules/ffmpeg/dicom2jpeg';
-var appswitchpath = appRootDir + '/node_modules/imagemagick/appswitch';
-var curlpath = appRootDir + '/node_modules/curl/curl';
-var magickpath = appRootDir + '/node_modules/imagemagick/magick';
-var posterpath = appRootDir + '/poster.sh';
-var getoffsetpath = appRootDir + '/getoffset.sh';
-var mainpath = appRootDir + '/main.sh';
-var mmodepath = appRootDir + '/mmodeify.sh';
-var concatpath = appRootDir + '/concat.sh';
 var filelist = [];
 var widtharr = [];
 var heightarr = [];
@@ -56,40 +46,10 @@ function maketemp() {
 	return text;
 }
 
-function run_cmd(cmd, args, callBack) {
-	var spawn = require('child_process').spawn;
-	var child = spawn(cmd, args);
-	var resp = "";
-	child.stdout.on('data', function(buffer) {
-		resp += buffer.toString()
-	});
-	child.stdout.on('end', function() {
-		callBack(resp)
-	});
-} // ()
-var isdicom=0;
-function isclip(filename,filewithpath) {
+function isclip(filename) {
 	var clipext = ['mp4', 'm4v', 'avi', 'wmv', 'mov', 'flv', 'mpg', 'mpeg'];
 	for (var i = 0; i < clipext.length; i++) {
 		if (filename.toLowerCase().split('.').pop().indexOf(clipext[i]) >= 0) {
-			return (1);
-		}
-	}
-	var filetype=spawnsync('file',['-Ib', filewithpath,]); // '| grep -i dicom']);
-	var filetyperesult=filetype.stdout.toString().toLowerCase();
-	var dicomsearch=filetyperesult.indexOf('dicom');
-	//console.log(filetyperesult, isdicom);
-	if(dicomsearch>-1){
-		isdicom=1;
-		return(1);
-	}
-	return (0);
-}
-
-function isstill(filename) {
-	var stillext = ['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'gif'];
-	for (var i = 0; i < stillext.length; i++) {
-		if (filename.toLowerCase().split('.').pop().indexOf(stillext[i]) >= 0) {
 			return (1);
 		}
 	}
@@ -111,7 +71,7 @@ function search(startPath) {
 			for (var m = 0; m < list_temp.length; m++) {
 				list.push(list_temp[m]);
 			}
-		} else if (isclip(filename, files[i].path)>0) {
+		} else if (isclip(filename)>0) {
 			list.push(filename);
 		}
 	}
@@ -144,7 +104,7 @@ $("#filelistwrap").on('drop', function(event) {
 					//$('#filelist').append(index + ': ' + temp_list[k] + '<br />');
 				}
 			}
-		} else if (isclip(name, webUtils.getPathForFile(files[i]))>0) {
+		} else if (isclip(name)>0) {
 			if (filelist.indexOf(pathn) == -1) {
 				filelist.push(pathn);
 				index = filelist.length;
@@ -161,6 +121,10 @@ $("#filelistwrap").on('drop', function(event) {
 		$("#filelistwrap").hide();
 		$('#maintitle').hide();
 		 $('#loading-container').show();
+		// Spin up the magick-wasm worker now so its one-time WASM init runs in
+		// parallel with ffmpeg's preview/still extraction — by the time the user
+		// draws the line and generates, the worker is already warm.
+		mmmagick.warmup().catch(function(){});
 		preview();
 	}
 });
@@ -184,29 +148,6 @@ $(document).on('drop', function(e) {
 	e.stopPropagation();
 	e.preventDefault();
 });
-/*
-function deidentify(filelist, croppixels) {
-	var temp = maketemp();
-	outfile = '/tmp/' + temp + '.mp4';
-	console.log("saving to: " + outfile);
-	ffmpeg = spawn(ffmpegpath, ['-i', clips[0], '-an', '-q:v', '1', '-vcodec', 'libx264', '-y', '-pix_fmt', 'yuv420p', '-vf', 'setsar=1,scale=trunc(iw/2)*2:trunc(ih/2)*2,crop=in_w:in_h-50:0:50', outfile]);
-	if (ffmpeg.status.toString() == 0) {
-		console.log('successful transcoding for: ' + clips[0]);
-		folder = 'daaskjh876';
-		localfile = 'file=@' + outfile;
-		uploadlink = 'https://www.ultrasoundoftheweek.com/cspublic/curlupload.php?&f=' + folder;
-		curlsend = spawn(curlpath, ['-i', '-F', localfile, uploadlink]);
-		if (curlsend.status.toString() == 0) {
-			console.log('sucessful upload for: ' + outfile);
-		} else {
-			console.log("curl ERROR: " + curlsend.stderr.toString());
-		}
-	} else {
-		console.log("ffmpeg ERROR: " + ffmpeg.output.toString());
-	}
-}  //for first curl use curl -b cookie.txt, then use curl -b cookie.txt to avoid re-authentication and set session var
-*/
-
 function queue(tasks) {
 	let index = 0;
 	const runTask = (arg) => {
@@ -364,11 +305,7 @@ function preview() {
 	var vftext ='scale=iw*min(1\\,min(800/iw\\,600/ih)):-1,setsar=1,scale=trunc(in_w/2)*2:trunc(in_h/2)*2';
         var outfile = workdir + '/temp.mp4';
 	//console.log(ffmpegpath+' -i '+filelist[0]+' -an -y -vf '+vftext+' '+outfile);
-	if (isdicom==0){
-        	myqueue.push(customSpawn(ffmpegpath, ['-i', filelist[0], '-an', '-y', '-vf', vftext, outfile]));
-	} else {
-		myqueue.push(customSpawn(dicom2jpegpath, [ filelist[0], 'dicomtemp.jpg', '-ffmpeg', ffmpegpath, '-y', '-vf', vftext, outfile]));
-	}
+	myqueue.push(customSpawn(ffmpegpath, ['-i', filelist[0], '-an', '-y', '-vf', vftext, outfile]));
 	myqueue.push(setupselect());
 /*
 	ffprobe = spawnsync(ffprobepath, ['-print_format', 'json', '-show_streams', '-i', outfile]);
@@ -585,75 +522,51 @@ $('#selectlineok').click(function(){
         $('#selectlinewrap').hide();
 	$('#calibratemsg').slideDown();
 	console.log(X1,Y1,X2,Y2);
-	
-//HERE
-/*
-	var myqueue = [];
-         //$('#loading-mm-container').show();
-        //myqueue.push(getstillnum());
-        var infile = workdir + '/temp.mp4';
-        var outfile = workdir + '/stills.%05d.png';
-       spawnsync(ffmpegpath, ['-i', infile, '-an', '-y', '-f', 'image2', '-qscale:v', '2', '-q:v', '1', outfile]);
-        var posterin= workdir + '/stills.00001.png';
-        var posterout=workdir + '/poster.png';
-	var offset=spawn(mainpath, [X1,Y1,X2,Y2,posterin,posterout,magickpath, workdir]);
-	offset.stdout.on('data', (data) => {
-                        console.log("main:"+data.toString());
-                        offset=data.toString();
-                 });
-*/
-	//HERE!
 	mmode(X1,Y1,X2,Y2);
    }
 });
-function getoffset(x1,y1,x2,y2,posterin,posterout,magickpath, workdir) {
-	//const exec = require('child_process').exec;
-		//console.log(x1,y1,x2,y2,posterin,posterout,magickpath, workdir);
-	return () => new Promise((resolve, reject) => {
-		console.log(x1,y1,x2,y2,posterin,posterout,magickpath, workdir);
-		var offsetdata=spawn(getoffsetpath, [x1,y1,x2,y2,posterin,posterout,magickpath, workdir]);
-        	offsetdata.stdout.on('data', (data) => {
-                	console.log("offset:"+data.toString());
-			offset=data.toString();
-			resolve(1);
-		 });
-        });
+function getoffset(x1,y1,x2,y2,posterin,posterout,workdir) {
+	// magick-wasm: best-fit SRT distort → page X offset (the old `-format %X`),
+	// plus the line angle. Stored globally for the per-frame column extraction.
+	return () => mmmagick.getOffset(posterin, x1, y1, x2, y2).then(function (r) {
+		window.mmOffset = r.offset;
+		window.mmAngle = r.angle;
+		console.log('offset:', r.offset, 'angle:', r.angle);
+	});
 }
-function getstillnum(){
-	return () => new Promise((resolve, reject) => {
-                var stills=spawn(ffprobepath, ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames', '-of', 'default=nokey=1:noprint_wrappers=1', filelist[0]]);
-                stills.stdout.on('data', (data) => {
-                        //console.log("stillcount:"+data.toString());
-                        stillcount=data.toString();
-			mmodewidth=stillcount*3;
-			$('#mmode').css('width', mmodewidth+'px');
-                 });
-                resolve(1);
-        });
+// Per-frame task: distort the frame so the drawn line is vertical, crop its
+// 3px column, overwrite the still in place (replaces mmodeify.sh).
+function mmodeColumnTask(infile, x1, y1) {
+	return () => mmmagick.extractColumn(infile, infile, x1, y1, window.mmAngle, Math.round(x1 - window.mmOffset - 1));
 }
-function mmodequeue(x1,y1,x2,y2,infile,magickpath,workdir) {
-	return () => new Promise((resolve, reject) => { 
-		//var mmode=spawn(mmodepath, [x1,y1,x2,y2,infile,magickpath,workdir, offset]);
-		//console.log(x1,y1,x2,y2,infile,magickpath,workdir, offset);
-		//POSTER CODE
-/*
-		$('#poster').html('<img src="'+workdir+'/posterbig.png"></img>');
-		$('#poster').css('width',window.width);
-*/
+// Concat task: +append every frame's column → mmode.png, then stack the poster
+// under it and trim (replaces concat.sh).
+function concatMmodeTask(workdir, count) {
+	return () => {
+		var cols = [];
+		for (var k = 1; k <= count; k++) { cols.push(workdir + '/stills.' + String("00000" + k).slice(-5) + '.png'); }
+		// Keep the clean strip (mmode.strip.png) so "Save with measurements" can
+		// composite the annotation overlay over it; mmode.png is strip + poster.
+		return mmmagick.appendColumns(cols, workdir + '/mmode.strip.png')
+			.then(function () { return mmmagick.appendPosterAndTrim(workdir + '/mmode.strip.png', workdir + '/poster.png', workdir + '/mmode.png'); });
+	};
+}
+function mmodequeue(x1,y1,x2,y2,infile,workdir) {
+	return () => new Promise((resolve, reject) => {
 		var mymmodequeue=[];
 		for (i = 1; i <= stillcount; i++) {
 			//console.log("mmode offset:"+offset);
 			//console.log("seting up mmode task: "+i);
                 	var infile = workdir+'/stills.'+String("00000" + i).slice(-5)+'.png';
                 	//console.log("infile:"+infile);
-                	mymmodequeue.push(customSpawn(mmodepath, [x1,y1,x2,y2,infile,magickpath,workdir, offset]));
+                	mymmodequeue.push(mmodeColumnTask(infile, x1, y1));
 			if(i==1){
 				mymmodequeue.push(getmmodedimensions());
 			}
                 	//console.log(i,x1,y1,x2,y2,infile,magickpath,workdir);
                 	mymmodequeue.push(progress(i));
         	}
-		mymmodequeue.push(customSpawn(concatpath, [workdir,magickpath]));
+		mymmodequeue.push(concatMmodeTask(workdir, stillcount));
         	mymmodequeue.push(showmmode(1));
 		//mymmodequeue.push(getmmodedimensions());
 		window.t0 = performance.now();
@@ -664,28 +577,20 @@ function mmodequeue(x1,y1,x2,y2,infile,magickpath,workdir) {
 	 });
 }
 function getmmodedimensions(){
-    return () => new Promise((resolve, reject) => {
-	var mmodestill=workdir+'/stills.00001.png';
-	var mmodedim=spawn(magickpath, ['convert', mmodestill, '-ping', '-format', '%w:%h', 'info:']);
-        mmodedim.stdout.on('data', (data) => {
-              	console.log(data.toString());
-              	var info=data.toString();
-		mmodeheight =info.split(":")[1];
-		if (mmodeheight>770){
-			mmodeheight=770;
-		}
-        	//mmodewidth = info.split(":")[0];
-		//console.log(mmodeheight, mmodewidth);
+    // The first frame's column has already been written to stills.00001.png;
+    // its height is the m-mode height. Width = one 3px column per frame.
+    return () => mmmagick.getDimensions(workdir+'/stills.00001.png').then(function (dim) {
+		mmodeheight = dim.h;
+		if (mmodeheight > 770) { mmodeheight = 770; }
+		mmodewidth = stillcount * 3;
 		$('#mmodewrap').css('height', mmodeheight+'px');
-                $('#mmodewrap').css('width', mmodewidth+'px');
-                $('#mmodecanvas').attr('height', mmodeheight);
-                $('#mmodecanvas').attr('width', mmodewidth);
+		$('#mmodewrap').css('width', mmodewidth+'px');
+		$('#mmodecanvas').attr('height', mmodeheight);
+		$('#mmodecanvas').attr('width', mmodewidth);
 		$('#mmode').css('height', mmodeheight+'px');
 		$('#mmode').css('width', mmodewidth+'px');
 		$('#slices').css('height', mmodeheight+'px');
 		$('#slices').css('width', mmodewidth+'px');
-        });
-	resolve(1);
     });
 }
 function mmode(x1,y1,x2,y2) {
@@ -703,7 +608,7 @@ function mmode(x1,y1,x2,y2) {
 	var posterbig=workdir + '/posterbig.png';
 	//spawnsync(ffmpegpath, ['-i', infile, '-an', '-y', '-f', 'image2', '-qscale:v', '2', '-q:v', '1', '-vframes', '1', posterin]);
 	//myqueue.push(firststill());
-	myqueue.push(getoffset(x1,y1,x2,y2,posterin,posterout,magickpath, workdir));
+	myqueue.push(getoffset(x1,y1,x2,y2,posterin,posterout,workdir));
 	//myqueue.push(progress(2));
 	//console.log(x1,y1,x2,y2,posterin,posterout,magickpath, workdir);
 /*
@@ -724,9 +629,9 @@ function mmode(x1,y1,x2,y2) {
 */
 	//myqueue.push(getstillnum());
 	$('#calibrateok').show();
-	myqueue.push(customSpawn(posterpath, [x1,y1,x2,y2,posterin,posterout,magickpath,posterbig]));
+	myqueue.push(() => mmmagick.drawPoster(posterin, x1, y1, x2, y2, posterbig, posterout, 250));
 	//myqueue.push(progress(3));
-	myqueue.push(mmodequeue(x1,y1,x2,y2,infile,magickpath,workdir));
+	myqueue.push(mmodequeue(x1,y1,x2,y2,infile,workdir));
 	//myqueue.push(customSpawn(concatpath, [workdir]));
 	//myqueue.push(showmmode(1));
 //ABOVE
@@ -766,6 +671,7 @@ function showmmode(i) {
 			$('#save').show();
 			//$('#poster').hide();
 			
+			delay=0;   // reset so repeat builds don't accumulate an ever-growing stagger
 			$('.mmodeslice').each(function(){
 				var mmodesliceid=$(this).attr('id');
 				setTimeout(addanimate.bind(null, mmodesliceid), delay);
@@ -777,6 +683,9 @@ function showmmode(i) {
         });
 }
 var ppcm;
+var calcm = 4;                               // cm spanned by the calibration line (user-selectable)
+var measText = '', measColor = '#FFF000';   // latest measurement value, drawn onto the canvas so it saves
+var lastMeas = null;                         // last drawn measurement, so it can be re-rendered after recalibration
 $(document).on('mousedown', '#calibratecanvas', function (event) {
 	can = document.getElementById('calibratecanvas');
 	ctx = can.getContext('2d');
@@ -817,36 +726,51 @@ $(document).on('mousedown', '#calibratecanvas', function (event) {
 
 
 
+var lastCal = null;   // remember the calibration line so we can redraw on cm change
 function drawCalLine(x, y, stopX, stopY) {
-        ctx.strokeStyle = 'rgba(0,153,255,0.8)';
-        //ctx.strokeStyle="#009BCD";
-        ctx.lineWidth = 3;
+        lastCal = { x: x, y: y, stopX: stopX, stopY: stopY };
+        ctx.strokeStyle = 'rgba(0,153,255,0.85)';
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
         ctx.clearRect(0, 0, can.width, can.height);
+        // main caliper line
         ctx.beginPath();
         ctx.moveTo(x, y);
         ctx.lineTo(stopX, stopY);
-        ctx.closePath();
         ctx.stroke();
-		var pixelLength = Math.round(Math.sqrt(Math.pow((stopX - x), 2) + Math.pow((stopY - y), 2)));
-        var pixelLengthX = Math.abs(stopX - x);
-        var pixelLengthY = Math.abs(stopY - y);
-        var resultsall = pixelLength + "px";
-        //$('.myResults').text(resultsall);
-        ppcm = parseFloat(Math.round(pixelLength * 10/4)/10).toFixed(1);
-        //console.log(ppcm);
+        var pixelLength = Math.round(Math.sqrt(Math.pow((stopX - x), 2) + Math.pow((stopY - y), 2)));
+        // pixels per cm = measured length / number of cm spanned (calcm).
+        ppcm = parseFloat(Math.round(pixelLength * 10 / calcm) / 10).toFixed(1);
+        // Perpendicular unit vector for the end caps and tick marks.
+        var dx = stopX - x, dy = stopY - y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 1) { return; }
+        var px = -dy / len, py = dx / len;
+        // End caps at both ends (longer), then calcm-1 evenly spaced cm ticks.
+        drawCalTick(x, y, px, py, 9);
+        drawCalTick(stopX, stopY, px, py, 9);
+        for (var i = 1; i < calcm; i++) {
+            var t = i / calcm;
+            drawCalTick(x + dx * t, y + dy * t, px, py, 6);
+        }
     }
 
-function drawCalLineArms(x, y, stopX, stopY) {
-        ctx.strokeStyle = 'rgba(0,153,255,0.8)';
-        //ctx.strokeStyle="#009BCD";
-        ctx.lineWidth = 3;
-        //ctx.clearRect(0, 0, can.width, can.height);
+// One tick perpendicular to the caliper, centered at (cx,cy), half-length `half`.
+function drawCalTick(cx, cy, px, py, half) {
         ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(stopX, stopY);
-        ctx.closePath();
+        ctx.moveTo(cx - px * half, cy - py * half);
+        ctx.lineTo(cx + px * half, cy + py * half);
         ctx.stroke();
 }
+// Changing the cm count re-scales ppcm and redraws the tick marks live.
+$('#calcmselect').on('change', function () {
+        calcm = parseInt($(this).val(), 10) || 4;
+        if (lastCal) {
+            can = document.getElementById('calibratecanvas');
+            ctx = can.getContext('2d');
+            drawCalLine(lastCal.x, lastCal.y, lastCal.stopX, lastCal.stopY);
+        }
+});
 var calibrated=0;
 var mmodedone=0;
 $('#calibrateok').click(function(){
@@ -879,8 +803,61 @@ $('#calibrateok').click(function(){
 		$('#mmodewrap').show();
 		$('#mmodemsg').show();
 	//});
+	// Returning to the m-mode after a (re)calibration: re-render any existing
+	// measurement so its value reflects the new ppcm/pps.
+	if (lastMeas) { drawMeasurement(lastMeas.sX, lastMeas.sY, lastMeas.eX, lastMeas.eY); }
     }
 });
+// Draw a measurement (calipers + arrows + value) on the m-mode canvas. Pulled
+// out of the mousemove handler so it can be re-run after recalibration — which
+// recomputes the value against the new ppcm/pps. Stores lastMeas for that.
+function drawMeasurement(sX, sY, eX, eY) {
+    can = document.getElementById('mmodecanvas');
+    ctx = can.getContext('2d');
+    ctx.clearRect(0, 0, can.width, can.height);
+    var xdiff = Math.abs(eX - sX), ydiff = Math.abs(eY - sY);
+    // When the gap is below this, the inward-pointing heads would converge and
+    // clutter the middle, so flip them to sit fully OUTSIDE the lines pointing
+    // OUTWARD (away from the gap). Above it, heads sit inside pointing out to
+    // each line. The connector line always spans the middle.
+    var ARROW_OUTSIDE = 48;
+    if (ydiff > xdiff) {
+        var direction = "h";
+        var outside = ydiff < ARROW_OUTSIDE;
+        drawLine4(sX, sY, sX, eY, direction, pps, ppcm, !outside);
+        drawLine5(0, eY, slicetotal, eY, direction);
+        drawLine5(0, sY, slicetotal, sY, direction);
+        var top = Math.min(sY, eY), bot = Math.max(sY, eY);
+        if (outside) {
+            // heads point inward at each line; tails extend outward (away from gap)
+            drawLine5(sX, top - ARROW_TAIL, sX, top, direction); arrowV(sX, top, +1);
+            drawLine5(sX, bot, sX, bot + ARROW_TAIL, direction); arrowV(sX, bot, -1);
+        } else { arrowV(sX, top, -1); arrowV(sX, bot, +1); }
+    } else {
+        var direction = "v";
+        var outside = xdiff < ARROW_OUTSIDE;
+        drawLine4(sX, sY, eX, sY, direction, pps, ppcm, !outside);
+        drawLine5(eX, 0, eX, can.height, direction);
+        drawLine5(sX, 0, sX, can.height, direction);
+        var left = Math.min(sX, eX), right = Math.max(sX, eX);
+        if (outside) {
+            // heads point inward at each line; tails extend outward (away from gap)
+            drawLine5(left - ARROW_TAIL, sY, left, sY, direction); arrowH(left, sY, +1);
+            drawLine5(right, sY, right + ARROW_TAIL, sY, direction); arrowH(right, sY, -1);
+        } else { arrowH(left, sY, -1); arrowH(right, sY, +1); }
+    }
+    // Value last, on top of the calipers, and on the canvas (not a DOM <div>)
+    // so it's included when the m-mode is saved.
+    if (measText) {
+        ctx.font = 'bold 28px sans-serif';
+        ctx.fillStyle = measColor;
+        ctx.shadowColor = 'rgba(0,0,0,0.9)';
+        ctx.shadowBlur = 4;
+        ctx.fillText(measText, 18, 36);
+        ctx.shadowBlur = 0;
+    }
+    lastMeas = { sX: sX, sY: sY, eX: eX, eY: eY };
+}
 $(document).on('mousedown', '#mmodecanvas', function(event) {
     can = document.getElementById('mmodecanvas');
     ctx = can.getContext('2d');
@@ -899,51 +876,26 @@ $(document).on('mousedown', '#mmodecanvas', function(event) {
     }
     while (currentElement = currentElement.offsetParent)
 
-    startX = event.pageX - totalOffsetX;
-    startY = event.pageY - totalOffsetY;
+    startX = Math.max(0, Math.min(can.width,  event.pageX - totalOffsetX));
+    startY = Math.max(0, Math.min(can.height, event.pageY - totalOffsetY));
 
-    //ycorrect=$(canvas).offset() + $("html,body").scrollTop();
-    $(this).bind('mousemove', function(e) {
-        ctx.clearRect(0, 0, can.width, can.height);
-        var xdiff = Math.abs(startX - e.pageX + totalOffsetX);
-        var ydiff = Math.abs(startY - e.pageY + totalOffsetY);
-        //var ppcm = $(this).attr('ppcm');
-        //var pps = $(this).attr('pps');
-        //console.log(ppcm,pps);
-        if (ydiff > xdiff) {
-            var direction = "h";
-            drawLine4(startX, startY, startX, e.pageY - totalOffsetY, direction, pps, ppcm);
-            drawLine5(0, e.pageY - totalOffsetY, slicetotal, e.pageY - totalOffsetY, direction);
-		//
-            drawLine5(0, startY, slicetotal, startY, direction);
-            //drawLine5(0, e.pageY - totalOffsetY, 621, e.pageY - totalOffsetY, direction);
-            //drawLine5(0, startY, 621, startY, direction);
-            if (startY > e.pageY - totalOffsetY) {
-                drawArrowV(startX, startY, 't', 'h');
-                drawArrowV(startX, e.pageY - totalOffsetY, 'b', 'h');
-            } else {
-                drawArrowV(startX, startY, 'b', 'h');
-                drawArrowV(startX, e.pageY - totalOffsetY, 't', 'h');
-            }
-        } else {
-            var direction = "v";
-            drawLine4(startX, startY, e.pageX - totalOffsetX, startY, direction,pps,ppcm);
-            drawLine5(e.pageX - totalOffsetX, 0, e.pageX - totalOffsetX, can.height, direction);
-            drawLine5(startX, 0, startX, can.height, direction);
-            if (startX > e.pageX - totalOffsetX) {
-                drawArrowH(startX, startY, 'r', 'v');
-                drawArrowH(e.pageX - totalOffsetX, startY, 'l', 'v');
-            } else {
-                drawArrowH(startX, startY, 'l', 'v');
-                drawArrowH(e.pageX - totalOffsetX, startY, 'r', 'v');
-            }
-        }
-    });
-}).mouseup(function() {
-    $(this).unbind('mousemove');
+    // Track on the document so the drag keeps following even when the cursor
+    // leaves the canvas, clamping to the canvas edge so the value maxes out
+    // there ("max value of the outside dimension").
+    function onMeasMove(e) {
+        var ex = Math.max(0, Math.min(can.width,  e.pageX - totalOffsetX));
+        var ey = Math.max(0, Math.min(can.height, e.pageY - totalOffsetY));
+        drawMeasurement(startX, startY, ex, ey);
+    }
+    function onMeasUp() {
+        $(document).off('mousemove.meas', onMeasMove);
+        $(document).off('mouseup.meas', onMeasUp);
+    }
+    $(document).on('mousemove.meas', onMeasMove);
+    $(document).on('mouseup.meas', onMeasUp);
 });
 
-function drawLine4(x, y, stopX, stopY, direction, pps, ppcm) {
+function drawLine4(x, y, stopX, stopY, direction, pps, ppcm, drawConnector) {
         //console.log(ppcm);
     if (direction == 'v') {
         ctx.strokeStyle = "#67C8FF";
@@ -951,25 +903,31 @@ function drawLine4(x, y, stopX, stopY, direction, pps, ppcm) {
         ctx.strokeStyle = "#FFF000";
     }
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(stopX, stopY);
-    ctx.closePath();
-    ctx.stroke();
+    // The connector spanning the gap is suppressed in outside mode (small gaps).
+    if (drawConnector !== false) {
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(stopX, stopY);
+        ctx.closePath();
+        ctx.stroke();
+    }
 
     var pixelLength = Math.round(Math.sqrt(Math.pow((stopX - x), 2) + Math.pow((stopY - y), 2)));
     var pixelLengthX = Math.abs(stopX - x);
     var pixelLengthY = Math.abs(stopY - y);
-    var time = parseFloat(Math.round(pixelLengthX * 10 / pps) / 10).toFixed(1);
-    var dist = parseFloat(Math.round(pixelLengthY * 10 / ppcm) / 10).toFixed(1);
+    var time = parseFloat(Math.round(pixelLengthX * 100 / pps) / 100).toFixed(2);
+    // ppcm = pixels per cm; ×10 → pixels per mm, so this is the distance in mm
+    // (×100 then /10 keeps one decimal place).
+    var dist = parseFloat(Math.round(pixelLengthY * 100 / ppcm) / 10).toFixed(1);
     if (direction == 'v') {
-        $('#measureresult').css('color', '#67C8FF');
-        var resultsall = time + " s ";
+        measColor = '#67C8FF';
+        measText = time + " s";
     } else {
-        $('#measureresult').css('color', '#FFF000');
-        var resultsall = dist + " cm";
-    }  
-    $('#measureresult').html(resultsall).show();
+        measColor = '#FFF000';
+        measText = dist + " mm";
+    }
+    // measText/measColor are painted onto the canvas by the mousemove handler
+    // (after the calipers/arrows) so the value is part of the saved overlay.
 }
 
 function drawLine5(x, y, stopX, stopY, direction) {
@@ -985,54 +943,24 @@ function drawLine5(x, y, stopX, stopY, direction) {
     ctx.closePath();
     ctx.stroke();
 }
-function drawArrowH(x, y, side, direction) {
-    if (direction == 'v') {
-        ctx.strokeStyle = "#67C8FF";
-    } else {
-        ctx.strokeStyle = "#FFF000";
-    }
-    if (side == 'r') {
-        xoffset = -10;
-        yoffset = 4;
-    } else {
-        xoffset = 10;
-        yoffset = 4;
-    }
+// Horizontal arrowhead: tip at (tipX,y), pointing right (dir=+1) or left (dir=-1).
+// The body (the open "V") extends opposite the point, so dir=+1 puts the head to
+// the LEFT of the tip and dir=-1 to the RIGHT — used to place heads inside or
+// outside the caliper lines. Inherits the current strokeStyle (set by drawLine5).
+var ARROW_LEN = 9, ARROW_W = 4, ARROW_TAIL = 32;
+function arrowH(tipX, y, dir) {
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + xoffset, y - yoffset);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + xoffset, y + yoffset);
-    ctx.closePath();
+    ctx.moveTo(tipX, y); ctx.lineTo(tipX - dir * ARROW_LEN, y - ARROW_W);
+    ctx.moveTo(tipX, y); ctx.lineTo(tipX - dir * ARROW_LEN, y + ARROW_W);
     ctx.stroke();
 }
-function drawArrowV(x, y, side, direction) {
-    if (direction == 'v') {
-        ctx.strokeStyle = "#67C8FF";
-    } else {
-        ctx.strokeStyle = "#FFF000";
-    }
-    if (side == 't') {
-        xoffset = 4;
-        yoffset = -10;
-    } else {
-        xoffset = 4;
-        yoffset = 10;
-    }
+// Vertical arrowhead: tip at (x,tipY), pointing down (dir=+1) or up (dir=-1).
+function arrowV(x, tipY, dir) {
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x - xoffset, y + yoffset);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + xoffset, y + yoffset);
-    ctx.closePath();
+    ctx.moveTo(x, tipY); ctx.lineTo(x - ARROW_W, tipY - dir * ARROW_LEN);
+    ctx.moveTo(x, tipY); ctx.lineTo(x + ARROW_W, tipY - dir * ARROW_LEN);
     ctx.stroke();
 }
 $('#restart').click(function(){
@@ -1082,87 +1010,31 @@ $('#save').click(function(){
 $('#recalibrate').click(function(){
 	calibrated=0;
 	postershown=0;
+	// The m-mode is already built — hide the leftover progress UI so it doesn't
+	// overlap the calibrate prompt.
+	$('#myprogresswrap').hide();
+	$('#progressmsg').hide();
+	$('#timeleft').hide();
+	$('#calibratemsg').slideDown();
 	$('#mmode').hide();
         $('#mmodewrap').hide();
         $('#mmodemsg').hide();
         $('#restart').hide();
         $('#save').hide();
 	$('#selectline').show();
+	$('#selectlinewrap').hide();   // we're calibrating, not re-picking the line
+	$('#calibratewrap').show();    // make the calibration canvas visible/drawable
 	$(this).hide();
 	$('#calibrateok').show();
+	// Redraw the previous calibration line so it can be seen and adjusted.
+	if (lastCal) {
+		can = document.getElementById('calibratecanvas');
+		ctx = can.getContext('2d');
+		drawCalLine(lastCal.x, lastCal.y, lastCal.stopX, lastCal.stopY);
+	}
 	
 });
 
-// SCREENSHOT CODE
-function appScreenshot(callback,imageFormat) {
-     var _this = this;
-     this.callback = callback;
-     imageFormat = imageFormat || 'image/jpeg';
-     
-     this.handleStream = (stream) => {
-         // console.log('stream',stream);
-         // Create hidden video tag
-         var video = document.createElement('video');
-         video.style.cssText = 'position:absolute;top:-10000px;left:-10000px;';
-         // Event connected to stream
-         video.onloadedmetadata = function () {
-             // Set video ORIGINAL height (screenshot)
-             video.style.height = this.videoHeight + 'px'; // videoHeight
-             video.style.width = this.videoWidth + 'px'; // videoWidth
- 
-             // Create canvas
-             var canvas = document.createElement('canvas');
-             canvas.width = this.videoWidth;
-             canvas.height = this.videoHeight;
-             var ctx = canvas.getContext('2d');
-             // Draw video on canvas
-             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
- 
-             if (_this.callback) {
-                 // Save screenshot to jpg - base64
-                 _this.callback(canvas.toDataURL(imageFormat));
-             } else {
-                 console.log('Need callback!');
-             }
- 
-             // Remove hidden video tag
-             video.remove();
-             try {
-                 // Destroy connect to stream
-                 stream.getTracks()[0].stop();
-             } catch (e) {}
-         }
-         video.srcObject = stream;
-         document.body.appendChild(video);
-     };
- 
-     this.handleError = function(e) {
-         console.log(e);
-     };
- 
-     // desktopCapturer now lives in the main process — fetch the source list over IPC.
-     ipcRenderer.invoke('get-sources').then((sources) => {
-         for (let i = 0; i < sources.length; ++i) {
-             // Filter: main screen (this app's own window, matched by title)
-             if (sources[i].name === document.title) {
-                 navigator.mediaDevices.getUserMedia({
-                     audio: false,
-                     video: {
-                         mandatory: {
-                             chromeMediaSource: 'desktop',
-                             chromeMediaSourceId: sources[i].id,
-                             minWidth: 1280,
-                             maxWidth: 4000,
-                             minHeight: 720,
-                             maxHeight: 4000
-                         }
-                     }
-                 }).then(_this.handleStream).catch(_this.handleError);
-                 return;
-             }
-         }
-     }).catch(_this.handleError);
- }
 function decodeBase64Image(dataString) {
   var matches = dataString.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/),
     response = {};
@@ -1178,53 +1050,37 @@ function decodeBase64Image(dataString) {
 }
 
 $('#save').click(function(){
-	appScreenshot(function(base64data){
-                    // Draw image in the img tag
-                    //document.getElementById("my-preview").setAttribute("src", base64data);
-			//fs.writeFile('~/Desktop/sreencap.png', imageBuffer.data, function(err) {
-			//	console.log(err);
-			//});
-			dialog.showSaveDialog({
-    				title: 'Save M.mode.ify with measurements',
-    				defaultPath: '~/Desktop/'+fileonly+'.mmode.png'
-  			}).then(function (result) {
-       				var fileName = result.filePath;
-       				if (result.canceled || !fileName){
-            				console.log("You didn't save the file");
-            				return;
-       				}
-        			//fs.createReadStream(workdir+'/mmode.png').pipe(fs.createWriteStream(fileName));
-				//var offset=$('#mmode').offset();
-				//console.log("left: "+offset.left+" top: "+offset.top);
-				var imageBuffer = decodeBase64Image(base64data);
-                        	var offset=$('#mmode').offset();
-				//SAVE TEMP FILE
-				var tempimage=workdir+'/temp.mm.meas.png';
-				var tempimage2=workdir+'/temp.mm.meas.concat.png';
-				fs.writeFile(tempimage,imageBuffer.data, function(err) {
-                                      //console.log(err);
-                                //});
-                        	//cropscreenshot(imageBuffer, offset.left, offset.top, mmodewidth, mmodeheight);
-				var xoff=offset.left+250;
-				var yoff=offset.top+25;
-				var croptext=mmodewidth+'x'+mmodeheight+'+'+xoff+'+'+yoff;
-				//console.log(croptext);
-				var filearr=fileName.toLowerCase().split('.');
-        			var ext=filearr.pop();
-        			if(ext!='png'){
-                			console.log('ext='+ext+',adding png');
-                			fileName=fileName+'.png';
-				}
-				spawnsync(magickpath, ['convert','-crop', croptext,  tempimage, tempimage2]);
-				spawnsync(magickpath, ['convert', '-gravity', 'center', '-background', 'black', '-interlace', 'Line', '', '-quality', '100%', '-append', '-trim', '-fuzz', '10%', '+repage', tempimage2, workdir+'/poster.png', fileName]);
-				//console.log(magickpath+' convert '+' -crop '+ croptext +' '+tempimage+' '+fileName);
-				});
-				//fs.createReadStream(tempimage).pipe(fs.createWriteStream(fileName));
-				/*fs.writeFile(fileName,imageBuffer.dat, function(err) {
-                        	      console.log(err);
-                        	});
-				*/
-        		});
-                },'image/png');
+	// Flatten the measurement annotations onto the m-mode without a screenshot.
+	// The annotations live on the transparent overlay canvas (#mmodecanvas),
+	// whose pixel buffer is the on-screen m-mode size. Export it as a PNG and
+	// composite it over the clean strip with magick-wasm, then append the poster
+	// and trim — same output as the plain Save, plus the measurements.
+	// (Old approach: desktopCapturer window screenshot + pixel-offset crop —
+	//  required Screen Recording permission and broke on HiDPI displays.)
+	var overlayBuffer = decodeBase64Image(document.getElementById('mmodecanvas').toDataURL('image/png'));
+	dialog.showSaveDialog({
+		title: 'Save M.mode.ify with measurements',
+		defaultPath: '~/Desktop/'+fileonly+'.mmode.png'
+	}).then(function (result) {
+		var fileName = result.filePath;
+		if (result.canceled || !fileName){
+			console.log("You didn't save the file");
+			return;
+		}
+		var filearr=fileName.toLowerCase().split('.');
+		var ext=filearr.pop();
+		if(ext!='png'){
+			console.log('ext='+ext+',adding png');
+			fileName=fileName+'.png';
+		}
+		var overlayPath=workdir+'/measoverlay.png';
+		var tempimage=workdir+'/temp.mm.meas.png';
+		fs.writeFile(overlayPath, overlayBuffer.data, function(err) {
+			if (err) { console.error('save (overlay write) error:', err); return; }
+			mmmagick.compositeOver(workdir+'/mmode.strip.png', overlayPath, tempimage)
+				.then(function () { return mmmagick.appendPosterAndTrim(tempimage, workdir+'/poster.png', fileName); })
+				.catch(function (e) { console.error('save (magick) error:', e); });
+		});
+	});
 });
 
