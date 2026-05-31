@@ -51,8 +51,9 @@ canvas#calibratecanvas:hover{
 #poster{
 display:none;
 	width:250px;
-    margin: auto;
+    margin: 14px auto 0;
 }
+#poster img { max-width: 250px; display: block; }
 div{
 font: 1em BlinkMacSystemFont;
 }
@@ -316,11 +317,16 @@ h1 {
 	color:black;
 	line-height:150px;
 }
+/* Vertically center the title next to the 72px app icon. */
+#maintitle h1 {
+	line-height: 72px;
+	margin: 0;
+}
 #logo {
-	width:350px;
-	float:left;
-	padding-right: 10px;
-	padding-left: 15px;
+	height: 80px;       /* wordmark lockup (~2.36:1); width scales from source 1299x550 */
+	width: auto;
+	display: block;
+	padding-left: 4px;
 }
 #crap{
 	display:none;
@@ -361,6 +367,26 @@ h1 {
     padding: 1px 3px;
     vertical-align: baseline;
     cursor: pointer;
+}
+/* Live M-mode preview shown under the sidebar buttons while drawing the line. */
+#mmodepreview {
+    display: none;
+    width: 250px;
+    margin-top: 14px;
+    text-align: center;
+}
+#mmodepreview .lbl {
+    color: #888;
+    font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+}
+#mmodepreviewimg {
+    max-width: 240px;
+    max-height: 240px;
+    border: 1px solid #333;
+    background: #000;
 }
 /* In-window splash: "M.mode.ify" holds briefly, zooms to 5000% and fades out,
    revealing the interface underneath. Removed from the DOM by renderer.js. */
@@ -491,7 +517,8 @@ th, td {
 #drag {
 text-align:center;
 margin:0;
-line-height:550px;
+/* fill the area below the header; bottom gap ends up ~equal to the 3% sides */
+line-height: calc(100vh - 176px);
 }
 #filelist{
 color:black;
@@ -506,21 +533,22 @@ margin-left:1em;
 }
 div#copyright {
     font-size: 0.8em;
-    /* line-height: 1em; */
-    /* padding-bottom: 40px; */
-    margin-left: 15px;
-    margin-top: -30px;
+    width: 189px;          /* match the logo width so it centers under it */
+    margin-left: 4px;      /* align with the logo's left edge */
+    margin-top: 1px;
+    text-align: center;
+    white-space: nowrap;
 }
 #filelistwrap {
     border: 3px dashed #999;
+    box-sizing: border-box;
     margin-top: 15px;
     margin-left: 3%;
     margin-right: 3%;
-    /* margin-bottom: 5%; */
-    /* height: 90%; */
     width: 94%;
     float: left;
-    height: 530px;
+    /* fill down to a bottom gap ~equal to the 3% side margins */
+    height: calc(100vh - 170px);
 }
 
 #filelist:first-line {margin-left:0;}
@@ -606,10 +634,34 @@ div#copyright {
 }
 #loading-container {
 display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
 
 	display:none;
+}
+/* Small Fluent-style determinate progress bar for the "Generating Preview"
+   step (light track, amber fill, smooth ease). Driven by renderer.js. */
+#previewbar {
+    width: 240px;
+    height: 6px;
+    margin-top: 14px;
+    background-color: #e9ecef;
+    border-radius: 3px;
+    overflow: hidden;
+}
+#previewbarfill {
+    width: 0;
+    height: 100%;
+    border-radius: 3px;
+    background-color: #f59e0b;
+}
+/* Disabled button (e.g. Calibrate OK before a line is drawn): greyed, no hover,
+   not clickable. pointer-events:none blocks both hover styling and clicks. */
+.btndisabled {
+    opacity: 0.4 !important;
+    pointer-events: none !important;
+    cursor: default !important;
 }
 #loading-mm-container {
         padding-top: 15%;
@@ -741,17 +793,10 @@ padding-bottom: 10px;
         }
 
         #loading-text {
-            -moz-animation: loading-text-opacity 2s linear 0s infinite normal;
-            -o-animation: loading-text-opacity 2s linear 0s infinite normal;
-            -webkit-animation: loading-text-opacity 2s linear 0s infinite normal;
-            animation: loading-text-opacity 2s linear 0s infinite normal;
             color: #000000;
             font-size: 16px;
-            opacity: 0;
-            position: relative;
             text-align: center;
             text-transform: uppercase;
-            bottom: 110px;
             width: 200px;
 		margin:auto;
         }

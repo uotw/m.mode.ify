@@ -14,6 +14,12 @@ const {shell} = require('electron');
 var mmmagick = require('./mmode-magick');   // cross-platform ImageMagick (WASM) — replaces the bundled `magick` binary + .sh scripts
 var mmffmpeg = require('./mmode-ffmpeg');    // one-pass native M-mode strip builder (rotate→crop→tile)
 var USE_FFMPEG = true;                       // false → fall back to the per-frame magick pipeline
+var LIVE_PREVIEW = true;                     // live M-mode preview while dragging the line
+var PREVIEW_H = 360;                         // preview frames downscaled to this height (display is smaller)
+var framesReady = false;                     // preview frames extracted for the current clip
+var previewBusy = false, previewPending = null;
+var previewW = 0, previewH = 0;              // downscaled preview-frame dimensions
+var genBarActive = false;                    // loading bar shown during m-mode generation (reselect flow)
 // Cross-platform ffmpeg/ffprobe from ffmpeg-static + ffprobe-static (macOS
 // arm64/x64 + Windows x64), resolved in ./ffmpeg-paths.js. The spawn() calls
 // below are unchanged — they just use these resolved paths.
@@ -88,10 +94,16 @@ $("#filelistwrap").on('dragover', function(event) {
 	event.stopPropagation();
 	event.preventDefault();
 });
-$("#filelistwrap").on('drop', function(event) {
+// Accept a dropped clip ANYWHERE in the app (bound to the document below).
+function handleFileDrop(event) {
 	event.preventDefault();
+	event.stopPropagation();
+	var dt = (event.originalEvent || event).dataTransfer;
+	if (!dt || !dt.files || !dt.files.length) { return; }
 	filelist=[];
-	var files = event.originalEvent.dataTransfer.files;
+	framesReady = false;            // new clip → re-extract preview frames
+	$('#mmodepreview').hide();
+	var files = dt.files;
 	remote.getCurrentWindow().focus();   // replaces the macOS-only `appswitch` binary
 	for (var i = 0; i < files.length; i++) {
 		var name = files[i].name;
@@ -103,33 +115,33 @@ $("#filelistwrap").on('drop', function(event) {
 				if (filelist.indexOf(temp_list[k]) == -1) {
 					filelist.push(temp_list[k]);
 					index = filelist.length;
-					//$('#filelist').append(index + ': ' + temp_list[k] + '<br />');
 				}
 			}
 		} else if (isclip(name)>0) {
 			if (filelist.indexOf(pathn) == -1) {
 				filelist.push(pathn);
 				index = filelist.length;
-				//$('#filelist').append(index + ': ' + path + '<br />');
 			}
 		}
 	}
 	if(filelist.length=='0'){
-		//console.log("no clip!");
 		$('#drag').html('ugh, no clip found, try again');
 	} else {
+		// Reset any current view so a drop works from anywhere (incl. mid-flow).
+		calibrated = 0; lastCal = null; postershown = 0;
+		$('#mmode,#mmodewrap,#mmodemsg,#poster,#calibratewrap,#calibratemsg,#selectline,#selectlinewrap').hide();
+		$('#save,#recalibrate,#reselectline,#calibrateok,#selectlineok').hide();
 		$('#sidebar').show();
 		$('#drag').css('visibility','hidden');
 		$("#filelistwrap").hide();
 		$('#maintitle').hide();
-		 $('#loading-container').show();
-		// Spin up the magick-wasm worker now so its one-time WASM init runs in
-		// parallel with ffmpeg's preview/still extraction — by the time the user
-		// draws the line and generates, the worker is already warm.
+		$('#loading-container').show();
+		// Warm up the magick-wasm worker so its one-time WASM init overlaps the
+		// ffmpeg transcode.
 		mmmagick.warmup().catch(function(){});
 		preview();
 	}
-});
+}
 $('#clearbtn').click(function() {
 	filelist = [];
 	$('#filelist').html('');
@@ -146,10 +158,7 @@ $(document).on('dragover', function(e) {
 	e.stopPropagation();
 	e.preventDefault();
 });
-$(document).on('drop', function(e) {
-	e.stopPropagation();
-	e.preventDefault();
-});
+$(document).on('drop', handleFileDrop);   // drop a clip anywhere in the app
 function queue(tasks) {
 	let index = 0;
 	const runTask = (arg) => {
@@ -293,10 +302,30 @@ function setupselect(){
 
 }
 var fileonly;
+// Small Fluent-style preview progress bar. Always shown, eases to 90% over ~1s,
+// then completes to 100% — so it never flashes and feels deliberate even when
+// the transcode is near-instant.
+var previewBarStart = 0;
+function startPreviewBar() {
+	previewBarStart = new Date().getTime();
+	var fill = $('#previewbarfill');
+	fill.css({ transition: 'none', width: '0%' });
+	if (fill[0]) { void fill[0].offsetWidth; }   // force reflow so the next change animates
+	fill.css({ transition: 'width 1s cubic-bezier(0.22, 1, 0.36, 1)', width: '90%' });
+}
+function finishPreviewBar(done) {
+	var wait = Math.max(0, 1000 - (new Date().getTime() - previewBarStart));   // min ~1s on screen
+	setTimeout(function () {
+		$('#previewbarfill').css({ transition: 'width 0.25s ease', width: '100%' });
+		setTimeout(function () { if (done) { done(); } }, 260);
+	}, wait);
+}
 function preview() {
 	fileonly=path.basename(filelist[0], path.extname(filelist[0]));
 	console.log(fileonly);
+	$('#loading-text').text('Generating Preview');
 	$('#loading-container').show();
+	startPreviewBar();
 	$('button').hide();
 	if (!fs.existsSync(workdir)) {
 		fs.mkdirSync(workdir);
@@ -307,7 +336,11 @@ function preview() {
 	var vftext ='scale=iw*min(1\\,min(800/iw\\,600/ih)):-1,setsar=1,scale=trunc(in_w/2)*2:trunc(in_h/2)*2';
         var outfile = workdir + '/temp.mp4';
 	//console.log(ffmpegpath+' -i '+filelist[0]+' -an -y -vf '+vftext+' '+outfile);
-	myqueue.push(customSpawn(ffmpegpath, ['-i', filelist[0], '-an', '-y', '-vf', vftext, outfile]));
+	// -preset ultrafast makes the preview transcode much faster (libx264 defaults
+	// to the slow "medium" preset); -crf 18 keeps quality high since the stills /
+	// m-mode are extracted from this file. Temp file is larger but disposable.
+	myqueue.push(customSpawn(ffmpegpath, ['-i', filelist[0], '-an', '-y', '-vf', vftext,
+		'-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', outfile]));
 	myqueue.push(setupselect());
 /*
 	ffprobe = spawnsync(ffprobepath, ['-print_format', 'json', '-show_streams', '-i', outfile]);
@@ -342,20 +375,20 @@ function previewdump(i) {
 	return () => new Promise((resolve, reject) => {
 		var seconds = new Date().getTime() / 1000;
 		var cliphtml = '<video class=added loop autoplay height='+window.height+' width='+window.width+'><source src="'+workdir + '/temp.mp4?v'+seconds+'" type=video/mp4></video>';
-		$('#selectlinemsg').show();
 		$('#selectline').append(cliphtml);
-		$('#selectline').fadeIn(1500);
-		//$('#selectlinewrap').show();
-		$('#loading-container').hide();
-		$('#restart').show();
-		$('#selectlineok').show();
-		
-		
-		selectline();
-		//console.log(cliphtml);
-
-		//imagehtml = '<td><img src="' + outfile + '" width="' + widthcrop + 'px" height="' + heightcrop + 'px"></img></td>';
-		resolve(i);
+		// Let the progress bar finish (min ~1s) before revealing the line picker.
+		finishPreviewBar(function () {
+			$('#loading-container').hide();
+			$('#selectlinemsg').show();
+			$('#selectline').show();
+			$('#selectlinewrap').show();   // the drop reset hides this — re-show so the canvas is clickable
+			$('#selectline').fadeIn(250);
+			$('#restart').show();
+			$('#selectlineok').show();
+			extractFramesForPreview();   // ready the frames for the live preview
+			selectline();
+			resolve(i);
+		});
 	});
 }
 $('#home').click(function() {
@@ -384,12 +417,61 @@ $('#home').click(function() {
 	//$('button').hide();
 });
  var X8, X9, Y8, Y9,X3, Y3, X4, Y4,stillcount, offset, mmodewidth, mmodeheight,taskcount;
+
+// --- Live M-mode preview while drawing the line -----------------------------
+// Pre-extract the clip's frames (into prev/) up front so the preview can build
+// from them while the user is still dragging. Kept separate from the real
+// generation frames (stills.*) so there's never a file conflict.
+function extractFramesForPreview() {
+	if (!LIVE_PREVIEW || framesReady) return;
+	try { if (!fs.existsSync(workdir + '/prev')) { fs.mkdirSync(workdir + '/prev'); } } catch (e) {}
+	// Downscale the preview frames (height PREVIEW_H) — decode + rotate cost
+	// scales with pixels, and the preview is shown small, so this is a big
+	// speedup with no visible quality loss. Don't upscale small clips.
+	var args = ['-i', workdir + '/temp.mp4', '-an', '-y', '-f', 'image2', '-qscale:v', '2', '-q:v', '1'];
+	if (window.height > PREVIEW_H) { args.push('-vf', 'scale=-2:' + PREVIEW_H); }
+	args.push(workdir + '/prev/p.%05d.png');
+	var child = spawn(ffmpegpath, args, { windowsVerbatimArguments: true });
+	child.on('close', function (code) {
+		if (code !== 0) { return; }
+		// cache the actual downscaled dimensions for the build/coord scaling
+		mmmagick.getDimensions(workdir + '/prev/p.00001.png').then(function (d) {
+			previewW = d.w; previewH = d.h; framesReady = true;
+		}).catch(function () {});
+	});
+	child.on('error', function () {});
+}
+// Coalesced throttle: only one ffmpeg build runs at a time and it always builds
+// the latest line position, so the drag stays smooth (the build is an async
+// spawn off the main thread) and the preview just catches up a beat behind.
+function requestPreview(x1, y1, x2, y2) {
+	if (!LIVE_PREVIEW || !framesReady) { return; }
+	previewPending = { x1: x1, y1: y1, x2: x2, y2: y2 };
+	if (!previewBusy) { runPreview(); }
+}
+function runPreview() {
+	if (!previewPending) { return; }
+	var p = previewPending; previewPending = null; previewBusy = true;
+	var out = workdir + '/preview.strip.png';
+	var angle = mmmagick.angleDeg(p.x1, p.y1, p.x2, p.y2);   // rotation angle is scale-invariant
+	// scale the line coords into the downscaled preview-frame space
+	var f = previewW / window.width;
+	mmffmpeg.buildStrip(ffmpegpath, workdir + '/prev/p.%05d.png', 1, stillcount, previewW, previewH,
+		Math.round(p.x1 * f), Math.round(p.y1 * f), angle, out)
+		.then(function () {   // no trim — show the full strip (black borders included)
+			$('#mmodepreviewimg').attr('src', out + '?' + Date.now());
+			$('#mmodepreview').css('display', 'block');
+		})
+		.catch(function () {})
+		.then(function () { previewBusy = false; if (previewPending) { runPreview(); } });
+}
+// ----------------------------------------------------------------------------
 function selectline(){
   var can = document.getElementById('selectlinecanvas');
   var ctx = can.getContext('2d');
   var startX, startY;
 
-  $("canvas").mousedown(function(event) {
+  $("#selectlinecanvas").mousedown(function(event) {   // line-select canvas only (was $("canvas") — fired on the calibrate canvas too)
           var totalOffsetX = 0;
           var totalOffsetY = 0;
           var canvasX = 0;
@@ -503,11 +585,13 @@ function selectline(){
                   Y8 = Y10;
           }
           var resultsall = X8 + "," + Y8;
+          requestPreview(X8, Y8, X9, Y9);   // live M-mode preview as the line moves
   }
 }
 
 $('#selectlineok').click(function(){
    if(X8+Y8+X9+Y9>0){
+	$('#mmodepreview').hide();   // line committed — drop the live preview
         var X1=Math.round(X8);
         var Y1=Math.round(Y8);
         var X2=Math.round(X9);
@@ -519,9 +603,21 @@ $('#selectlineok').click(function(){
 	$('#selectlinemsg').hide();
 	$('#selectlineok').hide();
         $('#restart').hide();
-	$('#calibratewrap').show();
         $('#selectlinewrap').hide();
-	$('#calibratemsg').slideDown();
+	// Only go through calibration the first time. On a reselect (already
+	// calibrated) we reuse the calibration and reveal the new m-mode directly.
+	if (!calibrated) {
+		$('#calibratewrap').show();
+		$('#calibratemsg').slideDown();
+	} else {
+		// reselect: no calibrate step — hide the 2D clip and show a loading bar
+		// while ffmpeg rebuilds the strip (otherwise the screen goes blank).
+		$('#selectline').hide();
+		genBarActive = true;
+		$('#loading-text').text('Generating M-mode');
+		$('#loading-container').show();
+		startPreviewBar();
+	}
 	console.log(X1,Y1,X2,Y2);
 	mmode(X1,Y1,X2,Y2);
    }
@@ -658,7 +754,7 @@ function mmode(x1,y1,x2,y2) {
         stillcount=childProcess.stdout.toString();
 */
 	//myqueue.push(getstillnum());
-	$('#calibrateok').show();
+	if (!calibrated) { $('#calibrateok').addClass('btndisabled').show(); }   // greyed until a line is drawn (skip on reselect)
 	myqueue.push(() => mmmagick.drawPoster(posterin, x1, y1, x2, y2, posterbig, posterout, 250));
 	//myqueue.push(progress(3));
 	if (USE_FFMPEG) {
@@ -696,13 +792,23 @@ var delay=0;
 // Reveal the finished M-mode with a left-to-right "trace" wipe — time runs
 // left→right, so the strip sweeps in like a live M-mode being drawn.
 function revealMmode() {
-	$('#mmodewrap').show();
-	$('#mmodemsg').show();
-	$('#restart').show();
-	$('#save').show();
-	$('#recalibrate').show();
-	$('#mmode').show();
-	$('#slices').stop(true, false).css('width', 0).animate({ width: mmodewidth }, 900);
+	var doReveal = function () {
+		$('#loading-container').hide();
+		$('#mmodewrap').show();
+		$('#mmodemsg').show();
+		$('#restart').show();
+		$('#save').show();
+		$('#recalibrate').show();
+		$('#reselectline').show();
+		$('#mmode').show();
+		// Reference still (with the drawn line) below the buttons in the sidebar.
+		$('#poster').html('<img draggable="false" src="' + workdir + '/poster.png?' + Date.now() + '">').show();
+		$('#slices').stop(true, false).css('width', 0).animate({ width: mmodewidth }, 900);
+	};
+	// If the generation loading bar was showing (reselect flow), let it finish
+	// first; otherwise reveal immediately (first run reveals on calibrate OK).
+	if (genBarActive) { genBarActive = false; finishPreviewBar(doReveal); }
+	else { doReveal(); }
 }
 function showmmode(i) {
         return () => new Promise((resolve, reject) => {
@@ -735,24 +841,19 @@ $(document).on('mousedown', '#calibratecanvas', function (event) {
         startX = event.pageX - totalOffsetX;
         startY = event.pageY - totalOffsetY;
 
-        //ycorrect=$(canvas).offset() + $("html,body").scrollTop();
-        $(this).bind('mousemove', function (e) {
+        // Track on the document (namespaced) so the drag follows even off-canvas
+        // and, critically, unbinds correctly on release — set the calibration.
+        function onCalMove(e) {
             endX = e.pageX - totalOffsetX;
             endY = e.pageY - totalOffsetY;
             drawCalLine(startX, startY, endX, endY);
-        /*
-                //CALCULATE THE handle END POINTs
-                var d = 20; //length of 1/2 handle
-                var m = (startY-endY)/(startX-endX);
-                var nx1 = startX + Math.sqrt(d / (1+(1/m)));
-                var nx2 = startX - Math.sqrt(d / (1+(1/m)));
-                var ny1 = startY + (startX-nx1)/m;
-                var ny2 = startY + (startX-nx2)/m;
-                drawCalLineArms(nx1,ny1,nx2,ny2);
-        */
-        });
-    }).mouseup(function () {
-        $(this).unbind('mousemove');
+        }
+        function onCalUp() {
+            $(document).off('mousemove.cal', onCalMove);
+            $(document).off('mouseup.cal', onCalUp);
+        }
+        $(document).on('mousemove.cal', onCalMove);
+        $(document).on('mouseup.cal', onCalUp);
     });
 
 
@@ -776,6 +877,7 @@ function drawCalLine(x, y, stopX, stopY) {
         var dx = stopX - x, dy = stopY - y;
         var len = Math.sqrt(dx * dx + dy * dy);
         if (len < 1) { return; }
+        $('#calibrateok').removeClass('btndisabled');   // a real line exists → enable OK
         var px = -dy / len, py = dx / len;
         // End caps at both ends (longer), then calcm-1 evenly spaced cm ticks.
         drawCalTick(x, y, px, py, 9);
@@ -915,7 +1017,7 @@ function drawLine4(x, y, stopX, stopY, direction, pps, ppcm, drawConnector) {
     } else {
         ctx.strokeStyle = "#FFF000";
     }
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     // The connector spanning the gap is suppressed in outside mode (small gaps).
     if (drawConnector !== false) {
         ctx.beginPath();
@@ -949,7 +1051,7 @@ function drawLine5(x, y, stopX, stopY, direction) {
     } else {
         ctx.strokeStyle = "#FFF000";
     }
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.lineTo(stopX, stopY);
@@ -962,7 +1064,7 @@ function drawLine5(x, y, stopX, stopY, direction) {
 // outside the caliper lines. Inherits the current strokeStyle (set by drawLine5).
 var ARROW_LEN = 9, ARROW_W = 4, ARROW_TAIL = 32;
 function arrowH(tipX, y, dir) {
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(tipX, y); ctx.lineTo(tipX - dir * ARROW_LEN, y - ARROW_W);
     ctx.moveTo(tipX, y); ctx.lineTo(tipX - dir * ARROW_LEN, y + ARROW_W);
@@ -970,7 +1072,7 @@ function arrowH(tipX, y, dir) {
 }
 // Vertical arrowhead: tip at (x,tipY), pointing down (dir=+1) or up (dir=-1).
 function arrowV(x, tipY, dir) {
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x, tipY); ctx.lineTo(x - ARROW_W, tipY - dir * ARROW_LEN);
     ctx.moveTo(x, tipY); ctx.lineTo(x + ARROW_W, tipY - dir * ARROW_LEN);
@@ -995,7 +1097,7 @@ $('#restart').click(function(){
 	$( "#fadetoblack" ).show();
 	$( "#fadetoblack" ).animate({
     		opacity: 1,
-  	}, 1000, function() {
+  	}, 300, function() {
 		location.reload();
   	});
 });
@@ -1020,6 +1122,17 @@ $('#save').click(function(){
 	}); 
 });
 */
+$('#reselectline').click(function(){
+	// Back to line selection, keeping the existing calibration. Frames are
+	// already extracted, so the live preview works immediately.
+	$('#mmode').hide(); $('#mmodewrap').hide(); $('#mmodemsg').hide();
+	$('#poster').hide(); $('#save').hide(); $('#recalibrate').hide(); $(this).hide();
+	$('#calibratewrap').hide(); $('#calibratemsg').hide(); $('#calibrateok').hide();
+	var slc = document.getElementById('selectlinecanvas');
+	if (slc) { slc.getContext('2d').clearRect(0, 0, slc.width, slc.height); }
+	$('#selectline').show(); $('#selectlinewrap').show();
+	$('#selectlinemsg').show(); $('#selectlineok').show(); $('#restart').show();
+});
 $('#recalibrate').click(function(){
 	calibrated=0;
 	postershown=0;
@@ -1034,6 +1147,7 @@ $('#recalibrate').click(function(){
         $('#mmodemsg').hide();
         $('#restart').hide();
         $('#save').hide();
+        $('#poster').hide();
 	$('#selectline').show();
 	$('#selectlinewrap').hide();   // we're calibrating, not re-picking the line
 	$('#calibratewrap').show();    // make the calibration canvas visible/drawable
