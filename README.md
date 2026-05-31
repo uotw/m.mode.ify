@@ -45,9 +45,11 @@ Given a B-mode clip and a user-drawn line, the app:
 1. **Decomposes the clip into frames** (via ffmpeg).
 2. **Measures the line's angle** from your selected start/end points.
 3. **Rotates each frame** by that angle so your line becomes vertical.
-4. **Crops a 3-pixel-wide column** at the line position out of every rotated frame. (3 px is chosen so that, at the typical 30–60 fps of clinical clips, the assembled width works out to a sensible time scale.)
+4. **Crops a narrow column** at the line position out of every rotated frame. The column width — the **M-mode line width** — is **user-selectable from 1 to 5 px** (default 3). Wider columns capture more horizontal detail but stretch the time axis; the default of 3 px gives a sensible time scale at the typical 30–60 fps of clinical clips.
 5. **Appends the columns left → right**, producing the M-mode strip: x = time, y = depth along your line.
 6. **Stacks a labeled reference frame** (your line drawn in white over the first frame) beneath the strip, then trims.
+
+As you drag the line, a **live M-mode preview updates in real time** in the sidebar — and re-renders instantly when you change the line width — so you can fine-tune placement and width before committing to the full-resolution build.
 
 A reference still with the white M-mode line is kept alongside the result so you can see exactly where the trace was taken.
 
@@ -55,10 +57,11 @@ A reference still with the white M-mode line is kept alongside the result so you
 
 Because pixels-per-centimeter and frame rate vary by clip, you calibrate once per clip by **clicking and dragging along a known distance on the image's depth scale**. The number of centimeters spanned is **selectable** (the published tool used a fixed 4 cm; this app lets you pick), and the drag is shown with end-caps and evenly spaced tick marks.
 
-- **Distance calibration** uses the Pythagorean length of your calibration drag:
+- **Distance calibration** (depth axis) uses the Pythagorean length of your calibration drag — unaffected by line width:
   `pixels_per_cm = √((X₂−X₁)² + (Y₂−Y₁)²) / (cm spanned)`
-- **Time calibration** maps M-mode width to time from the clip's frames and duration (with the ×3 factor for the 3-px columns):
-  `pixels_per_second = (total frames × 3) / (clip duration in seconds)`
+- **Time calibration** (horizontal axis) maps M-mode width to time from the clip's frames and duration. Each frame contributes a column equal to the chosen **line width** `w` (1–5 px), so:
+  `pixels_per_second = (total frames × w) / (clip duration in seconds)`
+  Because the time scale tracks `w`, changing the line width keeps your time measurements accurate.
 
 You can then click-drag directly on the M-mode to read out **distance in millimeters** or **time in hundredths of a second**, and save the M-mode with the measurement annotations baked in.
 
@@ -89,6 +92,7 @@ This is the open-source **desktop** application. Unlike the original browser-bas
 
 - runs entirely **offline / locally** — clips are processed on your computer and never uploaded, so there is no upload size limit and no need to strip identifiers before sending anything anywhere;
 - ships native **macOS (Apple Silicon + Intel)** and **Windows** builds;
+- adds a **live M-mode preview** that updates as you draw, plus a **user-selectable line width (1–5 px)** and a selectable calibration distance;
 - bundles its own media tools, so there is nothing else to install.
 
 ---
