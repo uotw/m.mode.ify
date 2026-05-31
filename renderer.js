@@ -12,6 +12,8 @@ const os = require('os');                             // os-tmpdir replaced by b
 var ostemp = os.tmpdir();
 const {shell} = require('electron');
 var mmmagick = require('./mmode-magick');   // cross-platform ImageMagick (WASM) — replaces the bundled `magick` binary + .sh scripts
+var mmffmpeg = require('./mmode-ffmpeg');    // one-pass native M-mode strip builder (rotate→crop→tile)
+var USE_FFMPEG = true;                       // false → fall back to the per-frame magick pipeline
 // Cross-platform ffmpeg/ffprobe from ffmpeg-static + ffprobe-static (macOS
 // arm64/x64 + Windows x64), resolved in ./ffmpeg-paths.js. The spawn() calls
 // below are unchanged — they just use these resolved paths.
@@ -513,11 +515,10 @@ $('#selectlineok').click(function(){
 
 	//var angle = 180*Math.atan2(X2-X1,Y2-Y1)/3.14159265359;
 	//console.log(angle);
-	$('#myProgress').slideDown();
+	$('#myprogresswrap').hide();   // generation is ~instant now — no progress bar
 	$('#selectlinemsg').hide();
 	$('#selectlineok').hide();
-        $('#restart').hide();		
-	$('#progressmsg').show();
+        $('#restart').hide();
 	$('#calibratewrap').show();
         $('#selectlinewrap').hide();
 	$('#calibratemsg').slideDown();
@@ -548,7 +549,37 @@ function concatMmodeTask(workdir, count) {
 		// Keep the clean strip (mmode.strip.png) so "Save with measurements" can
 		// composite the annotation overlay over it; mmode.png is strip + poster.
 		return mmmagick.appendColumns(cols, workdir + '/mmode.strip.png')
-			.then(function () { return mmmagick.appendPosterAndTrim(workdir + '/mmode.strip.png', workdir + '/poster.png', workdir + '/mmode.png'); });
+			.then(function () { return mmmagick.appendPosterLeft(workdir + '/posterbig.png', workdir + '/mmode.strip.png', workdir + '/mmode.png'); });
+	};
+}
+// One-pass ffmpeg M-mode: build the whole strip natively, trim it, size the
+// display + measurement canvas to it, show it, and build the saved asset
+// (index poster on the LEFT of the strip). Replaces the per-frame magick loop.
+function buildMmodeFfmpegTask(x1, y1, x2, y2, workdir) {
+	return () => {
+		var angle = mmmagick.angleDeg(x1, y1, x2, y2);
+		var raw = workdir + '/mmode.strip.raw.png';
+		var strip = workdir + '/mmode.strip.png';
+		var N = fs.readdirSync(workdir).filter(function (f) { return /^stills\.\d+\.png$/.test(f); }).length;
+		return mmmagick.getDimensions(workdir + '/stills.00001.png').then(function (d) {
+			return mmffmpeg.buildStrip(ffmpegpath, workdir + '/stills.%05d.png', 1, N, d.w, d.h, x1, y1, angle, raw);
+		}).then(function () {
+			return mmmagick.trim(raw, strip);
+		}).then(function () {
+			return mmmagick.getDimensions(strip);
+		}).then(function (dim) {
+			mmodewidth = dim.w;
+			mmodeheight = dim.h;
+			if (mmodeheight > 770) { mmodeheight = 770; }   // display cap (matches old behavior)
+			$('#mmodewrap').css({ height: mmodeheight + 'px', width: mmodewidth + 'px' });
+			$('#mmodecanvas').attr('height', mmodeheight).attr('width', mmodewidth);
+			$('#mmode').css({ height: mmodeheight + 'px', width: mmodewidth + 'px' });
+			$('#slices').css({ height: mmodeheight + 'px', width: mmodewidth + 'px' });
+			$('#slices').html('<img class="mmodestrip" draggable="false" src="' + strip + '?' + Date.now() +
+				'" style="display:block;width:' + mmodewidth + 'px;height:' + mmodeheight + 'px;">');
+			// Saved m-mode: full-res index poster (with the line) to the LEFT of the strip.
+			return mmmagick.appendPosterLeft(workdir + '/posterbig.png', strip, workdir + '/mmode.png');
+		});
 	};
 }
 function mmodequeue(x1,y1,x2,y2,infile,workdir) {
@@ -608,7 +639,6 @@ function mmode(x1,y1,x2,y2) {
 	var posterbig=workdir + '/posterbig.png';
 	//spawnsync(ffmpegpath, ['-i', infile, '-an', '-y', '-f', 'image2', '-qscale:v', '2', '-q:v', '1', '-vframes', '1', posterin]);
 	//myqueue.push(firststill());
-	myqueue.push(getoffset(x1,y1,x2,y2,posterin,posterout,workdir));
 	//myqueue.push(progress(2));
 	//console.log(x1,y1,x2,y2,posterin,posterout,magickpath, workdir);
 /*
@@ -631,7 +661,13 @@ function mmode(x1,y1,x2,y2) {
 	$('#calibrateok').show();
 	myqueue.push(() => mmmagick.drawPoster(posterin, x1, y1, x2, y2, posterbig, posterout, 250));
 	//myqueue.push(progress(3));
-	myqueue.push(mmodequeue(x1,y1,x2,y2,infile,workdir));
+	if (USE_FFMPEG) {
+		myqueue.push(buildMmodeFfmpegTask(x1, y1, x2, y2, workdir));
+		myqueue.push(showmmode(1));
+	} else {
+		myqueue.push(getoffset(x1, y1, x2, y2, posterin, posterout, workdir));
+		myqueue.push(mmodequeue(x1, y1, x2, y2, infile, workdir));
+	}
 	//myqueue.push(customSpawn(concatpath, [workdir]));
 	//myqueue.push(showmmode(1));
 //ABOVE
@@ -657,28 +693,23 @@ function addanimate(mmodesliceid){
 	//console.log(mmodesliceid);
 }
 var delay=0;
+// Reveal the finished M-mode with a left-to-right "trace" wipe — time runs
+// left→right, so the strip sweeps in like a live M-mode being drawn.
+function revealMmode() {
+	$('#mmodewrap').show();
+	$('#mmodemsg').show();
+	$('#restart').show();
+	$('#save').show();
+	$('#recalibrate').show();
+	$('#mmode').show();
+	$('#slices').stop(true, false).css('width', 0).animate({ width: mmodewidth }, 900);
+}
 function showmmode(i) {
         return () => new Promise((resolve, reject) => {
-		//$('#timeleft').hide();
-		//$('#poster').hide();
-		$('#myprogresswrap').css('opacity','0');
-		//$('#mmode').append('<img class=added src="'+workdir + '/mmode.png" ></img>');
-		if(calibrated){
-			$('#mmode').fadeIn(1500);
-			$('#mmodewrap').show();
-			$('#mmodemsg').show();
-			$('#restart').show();
-			$('#save').show();
-			//$('#poster').hide();
-			
-			delay=0;   // reset so repeat builds don't accumulate an ever-growing stagger
-			$('.mmodeslice').each(function(){
-				var mmodesliceid=$(this).attr('id');
-				setTimeout(addanimate.bind(null, mmodesliceid), delay);
-				delay=delay+10;
-			});
-		}
 		mmodedone=1;
+		// If calibration is already done, this is the last step → reveal now.
+		// Otherwise the reveal happens when the user finishes calibrating (OK).
+		if(calibrated){ revealMmode(); }
                 resolve(i);
         });
 }
@@ -776,36 +807,18 @@ var mmodedone=0;
 $('#calibrateok').click(function(){
    if(ppcm){
 	calibrated=1;
-	if (mmodedone){
-		$('#mmode').fadeIn(1500);
-		$('#mmodewrap').show();
-                $('#mmodemsg').show();
-                $('#restart').show();
-		$('#save').show();
-		$('#recalibrate').show();
-		//$('#poster').hide();
-	}
 	$(this).hide();
 	$('#selectlinewrap').hide();
-	$('#selectline').hide();	
+	$('#selectline').hide();
 	$('#calibratemsg').hide();
-	//$('#recalibrate').show();
 	console.log(ppcm);
-/*
-	$('#myprogresswrap').animate({   
-		//marginTop: window.height+40+'px',
-		width: "200px",
-		
-	}, 2000, function(){
-*/
-		$('#timeleft').show();
-		$('#mmode').fadeIn(1500);
-		$('#mmodewrap').show();
-		$('#mmodemsg').show();
-	//});
-	// Returning to the m-mode after a (re)calibration: re-render any existing
-	// measurement so its value reflects the new ppcm/pps.
-	if (lastMeas) { drawMeasurement(lastMeas.sX, lastMeas.sY, lastMeas.eX, lastMeas.eY); }
+	// Calibration just finished — if the m-mode is built, reveal it now with
+	// the trace-wipe animation (this is the "final animation").
+	if (mmodedone){
+		revealMmode();
+		// Re-render any existing measurement against the new ppcm/pps.
+		if (lastMeas) { drawMeasurement(lastMeas.sX, lastMeas.sY, lastMeas.eX, lastMeas.eY); }
+	}
     }
 });
 // Draw a measurement (calipers + arrows + value) on the m-mode canvas. Pulled
@@ -825,8 +838,8 @@ function drawMeasurement(sX, sY, eX, eY) {
         var direction = "h";
         var outside = ydiff < ARROW_OUTSIDE;
         drawLine4(sX, sY, sX, eY, direction, pps, ppcm, !outside);
-        drawLine5(0, eY, slicetotal, eY, direction);
-        drawLine5(0, sY, slicetotal, sY, direction);
+        drawLine5(0, eY, can.width, eY, direction);
+        drawLine5(0, sY, can.width, sY, direction);
         var top = Math.min(sY, eY), bot = Math.max(sY, eY);
         if (outside) {
             // heads point inward at each line; tails extend outward (away from gap)
@@ -1078,7 +1091,7 @@ $('#save').click(function(){
 		fs.writeFile(overlayPath, overlayBuffer.data, function(err) {
 			if (err) { console.error('save (overlay write) error:', err); return; }
 			mmmagick.compositeOver(workdir+'/mmode.strip.png', overlayPath, tempimage)
-				.then(function () { return mmmagick.appendPosterAndTrim(tempimage, workdir+'/poster.png', fileName); })
+				.then(function () { return mmmagick.appendPosterLeft(workdir+'/posterbig.png', tempimage, fileName); })
 				.catch(function (e) { console.error('save (magick) error:', e); });
 		});
 	});

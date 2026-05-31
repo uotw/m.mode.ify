@@ -163,6 +163,41 @@ async function compositeOver(basePath, overlayPath, outPath) {
   });
 }
 
+// Fuzz-trim the uniform black border (e.g. the margin left by the ffmpeg
+// rotation canvas) down to the content bounding box.
+async function trim(inPath, outPath) {
+  await ready();
+  ImageMagick.read(readBytes(inPath), (img) => {
+    img.backgroundColor = MagickColors.Black;
+    img.colorFuzz = new Percentage(10);
+    img.trim();
+    if (img.resetPage) img.resetPage();
+    img.write(MagickFormat.Png, (d) => fs.writeFileSync(outPath, d));
+  });
+}
+
+// Place the index poster (the reference still with the drawn line) to the LEFT
+// of the m-mode strip — like a machine's 2D-image-then-M-mode layout. The poster
+// is scaled to the strip's height so they align.
+async function appendPosterLeft(posterPath, stripPath, outPath) {
+  await ready();
+  let h = 0;
+  ImageMagick.read(readBytes(stripPath), (img) => { h = img.height; });
+  const coll = MagickImageCollection.create();
+  const poster = MagickImage.create();
+  poster.read(readBytes(posterPath));
+  poster.resize(new MagickGeometry('x' + h));   // height h, width proportional
+  coll.push(poster);
+  const strip = MagickImage.create();
+  strip.read(readBytes(stripPath));
+  coll.push(strip);
+  coll.appendHorizontally((res) => {
+    res.backgroundColor = MagickColors.Black;
+    res.write(MagickFormat.Png, (d) => fs.writeFileSync(outPath, d));
+  });
+  coll.dispose();
+}
+
 // width:height of an image (replaces `magick convert -ping -format %w:%h`).
 async function getDimensions(p) {
   await ready();
@@ -177,7 +212,7 @@ async function getDimensions(p) {
 const handlers = {
   warmup: () => ready(),
   getOffset, extractColumn, drawPoster, appendColumns,
-  appendPosterAndTrim, cropImage, compositeOver, getDimensions
+  appendPosterAndTrim, cropImage, compositeOver, trim, appendPosterLeft, getDimensions
 };
 
 self.onmessage = async (event) => {

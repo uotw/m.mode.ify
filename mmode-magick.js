@@ -62,5 +62,7 @@ module.exports = {
   appendPosterAndTrim: (...a) => call('appendPosterAndTrim', a),
   cropImage: (...a) => call('cropImage', a),
   compositeOver: (...a) => call('compositeOver', a),
+  trim: (...a) => call('trim', a),
+  appendPosterLeft: (...a) => call('appendPosterLeft', a),
   getDimensions: (...a) => call('getDimensions', a)
 };
