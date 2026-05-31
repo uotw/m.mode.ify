@@ -348,6 +348,37 @@ h1 {
 #selectlinemsg {
     display:none;
     margin:10px;
+    /* sit above the line-select canvas so the line-width stepper is clickable */
+    position: relative;
+    z-index: 1000;
+}
+#lwstep {
+    margin-left: 10px;
+    white-space: nowrap;
+    color: #444;
+}
+#lwstep button {
+    font-size: 0.9em;
+    line-height: 1;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    margin: 0 1px;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    background: #f4f4f4;
+    color: #333;
+    cursor: pointer;
+    vertical-align: middle;
+}
+#lwstep button:hover { background: #e7e7e7; }
+#lwstep button:active { background: #dcdcdc; }
+#lwstep button:disabled { opacity: 0.35; cursor: default; }
+#lwval {
+    display: inline-block;
+    min-width: 1.1em;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
 }
 #progressmsg {
     display:none;
@@ -541,14 +572,22 @@ div#copyright {
 }
 #filelistwrap {
     border: 3px dashed #999;
+    border-radius: 16px;   /* match the macOS window corner radius */
     box-sizing: border-box;
     margin-top: 15px;
     margin-left: 3%;
     margin-right: 3%;
     width: 94%;
     float: left;
-    /* fill down to a bottom gap ~equal to the 3% side margins */
+    /* fill down to a bottom gap ~equal to the 3% side margins (JS refines this) */
     height: calc(100vh - 170px);
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+/* drag-over feedback: highlight the drop target before the file lands */
+body.dragging #filelistwrap {
+    border-color: #0099ff;
+    background-color: rgba(0, 153, 255, 0.08);
+    color: #0099ff;
 }
 
 #filelist:first-line {margin-left:0;}

@@ -20,6 +20,8 @@ var framesReady = false;                     // preview frames extracted for the
 var previewBusy = false, previewPending = null;
 var previewW = 0, previewH = 0;              // downscaled preview-frame dimensions
 var genBarActive = false;                    // loading bar shown during m-mode generation (reselect flow)
+var MLINE_W = 3;                             // m-mode line width: px sampled per frame (stretches the time axis)
+var MLINE_MIN = 1, MLINE_MAX = 5;
 // Cross-platform ffmpeg/ffprobe from ffmpeg-static + ffprobe-static (macOS
 // arm64/x64 + Windows x64), resolved in ./ffmpeg-paths.js. The spawn() calls
 // below are unchanged — they just use these resolved paths.
@@ -86,18 +88,20 @@ function search(startPath) {
 	return (list);
 }
 //allow drop on dahsed area
-$("#filelistwrap").on('dragenter', function(event) {
+$("#filelistwrap").on('dragenter dragover', function(event) {
 	event.stopPropagation();
 	event.preventDefault();
-});
-$("#filelistwrap").on('dragover', function(event) {
-	event.stopPropagation();
-	event.preventDefault();
+	if (!$('body').hasClass('dragging')) {
+		$('body').addClass('dragging');
+		$('#drag').text('Release to load your clip');
+	}
 });
 // Accept a dropped clip ANYWHERE in the app (bound to the document below).
 function handleFileDrop(event) {
 	event.preventDefault();
 	event.stopPropagation();
+	$('body').removeClass('dragging');
+	$('#drag').text('Drop your clip here');
 	var dt = (event.originalEvent || event).dataTransfer;
 	if (!dt || !dt.files || !dt.files.length) { return; }
 	filelist=[];
@@ -149,15 +153,36 @@ $('#clearbtn').click(function() {
 	$(this).hide();
 	$('#drag').css('visibility','visible');
 });
-//prevent ‘drop’ event on document.
-$(document).on('dragenter', function(e) {
+//prevent ‘drop’ event on document; also give drag-over feedback.
+$(document).on('dragenter dragover', function(e) {
 	e.stopPropagation();
 	e.preventDefault();
+	if (!$('body').hasClass('dragging')) {
+		$('body').addClass('dragging');
+		$('#drag').text('Release to load your clip');
+	}
 });
-$(document).on('dragover', function(e) {
-	e.stopPropagation();
-	e.preventDefault();
+$(document).on('dragleave', function(e) {
+	// relatedTarget is null when the cursor leaves the window entirely
+	if (!e.originalEvent.relatedTarget) {
+		$('body').removeClass('dragging');
+		$('#drag').text('Drop your clip here');
+	}
 });
+// Size the drop box so its bottom gap matches the 3% side gaps, whatever the
+// header/logo height is.
+function sizeDropBox() {
+	var box = document.getElementById('filelistwrap');
+	if (!box || box.offsetParent === null) { return; }   // only when visible
+	var gap = Math.round(window.innerWidth * 0.03);
+	var h = window.innerHeight - box.offsetTop - gap;
+	if (h < 120) { h = 120; }
+	box.style.height = h + 'px';
+	var drag = document.getElementById('drag');
+	if (drag) { drag.style.lineHeight = (h - 6) + 'px'; }
+}
+$(function () { sizeDropBox(); });
+$(window).on('resize', sizeDropBox);
 $(document).on('drop', handleFileDrop);   // drop a clip anywhere in the app
 function queue(tasks) {
 	let index = 0;
@@ -263,9 +288,9 @@ function setupselect(){
                         window.height = ffprobeOb.streams[0].height;
                         console.log('duration: '+ffprobeOb.streams[0].duration+' frames: '+ ffprobeOb.streams[0].nb_frames);
                         stillcount=ffprobeOb.streams[0].nb_frames;
-			mmodewidth=stillcount*3; 
+			mmodewidth=stillcount*MLINE_W;
                         $('#mmode').css('width', mmodewidth+'px');
-                        pps=3*stillcount/ffprobeOb.streams[0].duration;
+                        window.clipDuration=ffprobeOb.streams[0].duration; pps=MLINE_W*stillcount/window.clipDuration;
                         $('#selectlinewrap').css('height', window.height+'px');
                         $('#selectlinewrap').css('width', window.width+'px');
                         $('#selectlinecanvas').attr('height', window.height);
@@ -286,7 +311,7 @@ function setupselect(){
 			window.height = ffprobeOb.streams[0].height;
 			console.log('duration: '+ffprobeOb.streams[0].duration+' frames: '+ ffprobeOb.streams[0].nb_frames);
 			stillcount=ffprobeOb.streams[0].nb_frames;
-			pps=3*stillcount/ffprobeOb.streams[0].duration;
+			window.clipDuration=ffprobeOb.streams[0].duration; pps=MLINE_W*stillcount/window.clipDuration;
 			$('#selectlinewrap').css('height', window.height+'px');
 			$('#selectlinewrap').css('width', window.width+'px');
 			$('#selectlinecanvas').attr('height', window.height);
@@ -326,7 +351,7 @@ function preview() {
 	$('#loading-text').text('Generating Preview');
 	$('#loading-container').show();
 	startPreviewBar();
-	$('button').hide();
+	$('button').not('#lwup,#lwdown').hide();   // stepper visibility follows its #selectlinemsg parent
 	if (!fs.existsSync(workdir)) {
 		fs.mkdirSync(workdir);
 	}
@@ -349,7 +374,7 @@ function preview() {
 	window.height = ffprobeOb.streams[0].height;
 	//console.log('duration: '+ffprobeOb.streams[0].duration+' frames: '+ ffprobeOb.streams[0].nb_frames);
 	stillcount=ffprobeOb.streams[0].nb_frames;
-	pps=3*stillcount/ffprobeOb.streams[0].duration;
+	window.clipDuration=ffprobeOb.streams[0].duration; pps=MLINE_W*stillcount/window.clipDuration;
 	$('#selectlinewrap').css('height', window.height+'px');
 	$('#selectlinewrap').css('width', window.width+'px');
 	$('#selectlinecanvas').attr('height', window.height);
@@ -457,7 +482,7 @@ function runPreview() {
 	// scale the line coords into the downscaled preview-frame space
 	var f = previewW / window.width;
 	mmffmpeg.buildStrip(ffmpegpath, workdir + '/prev/p.%05d.png', 1, stillcount, previewW, previewH,
-		Math.round(p.x1 * f), Math.round(p.y1 * f), angle, out)
+		Math.round(p.x1 * f), Math.round(p.y1 * f), angle, out, MLINE_W)
 		.then(function () {   // no trim — show the full strip (black borders included)
 			$('#mmodepreviewimg').attr('src', out + '?' + Date.now());
 			$('#mmodepreview').css('display', 'block');
@@ -465,6 +490,22 @@ function runPreview() {
 		.catch(function () {})
 		.then(function () { previewBusy = false; if (previewPending) { runPreview(); } });
 }
+// --- M-mode line-width stepper (line-picker view) ---------------------------
+// Sets px-per-frame sampled into the strip. Wider = more horizontal detail but a
+// stretched time axis; pps is kept in sync so measurements stay accurate.
+function applyLineWidth(w) {
+	MLINE_W = Math.max(MLINE_MIN, Math.min(MLINE_MAX, w));
+	$('#lwval').text(MLINE_W);
+	$('#lwdown').prop('disabled', MLINE_W <= MLINE_MIN);
+	$('#lwup').prop('disabled', MLINE_W >= MLINE_MAX);
+	if (stillcount && window.clipDuration) { pps = MLINE_W * stillcount / window.clipDuration; }
+	if ((X8 + Y8 + X9 + Y9) > 0) { requestPreview(X8, Y8, X9, Y9); }   // refresh live preview
+}
+$('#lwup').on('click', function (e) { e.preventDefault(); e.stopPropagation(); applyLineWidth(MLINE_W + 1); });
+$('#lwdown').on('click', function (e) { e.preventDefault(); e.stopPropagation(); applyLineWidth(MLINE_W - 1); });
+// keep the canvas's mousedown from starting a line draw when poking the stepper
+$('#lwstep').on('mousedown', function (e) { e.stopPropagation(); });
+applyLineWidth(MLINE_W);
 // ----------------------------------------------------------------------------
 function selectline(){
   var can = document.getElementById('selectlinecanvas');
@@ -658,7 +699,7 @@ function buildMmodeFfmpegTask(x1, y1, x2, y2, workdir) {
 		var strip = workdir + '/mmode.strip.png';
 		var N = fs.readdirSync(workdir).filter(function (f) { return /^stills\.\d+\.png$/.test(f); }).length;
 		return mmmagick.getDimensions(workdir + '/stills.00001.png').then(function (d) {
-			return mmffmpeg.buildStrip(ffmpegpath, workdir + '/stills.%05d.png', 1, N, d.w, d.h, x1, y1, angle, raw);
+			return mmffmpeg.buildStrip(ffmpegpath, workdir + '/stills.%05d.png', 1, N, d.w, d.h, x1, y1, angle, raw, MLINE_W);
 		}).then(function () {
 			return mmmagick.trim(raw, strip);
 		}).then(function () {
@@ -709,7 +750,7 @@ function getmmodedimensions(){
     return () => mmmagick.getDimensions(workdir+'/stills.00001.png').then(function (dim) {
 		mmodeheight = dim.h;
 		if (mmodeheight > 770) { mmodeheight = 770; }
-		mmodewidth = stillcount * 3;
+		mmodewidth = stillcount * MLINE_W;
 		$('#mmodewrap').css('height', mmodeheight+'px');
 		$('#mmodewrap').css('width', mmodewidth+'px');
 		$('#mmodecanvas').attr('height', mmodeheight);
